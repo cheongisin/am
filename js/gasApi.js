@@ -2,7 +2,7 @@
 // - Netlify 기본: /.netlify/functions/state
 // - GAS 사용 시: 아래 GAS_URL에 Web App URL 넣기
 
-export const GAS_URL = "https://script.google.com/macros/s/AKfycbyvbIm7QytKeNYV0c2iP5RKO6rgUSe1IhG4RXlgmNcICMKKska_NjwLF7rcF-YJvMTZXg/exec";
+export const GAS_URL = "https://script.google.com/macros/s/AKfycbyDIIbJXLpd3hn8YccbFC2eMgxJzkVnua4z-UNCeyVjKwXOveq8MV4P8E0JQGG0FA2_4Q/exec";
 // 예) "https://script.google.com/macros/s/XXXX/exec"
 // Netlify만 쓸 거면 빈 문자열로 둬도 됨.
 
