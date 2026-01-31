@@ -1,48 +1,42 @@
-// Google Apps Script (GAS) sync layer
-// WebRTC 제거 버전
+// Netlify Functions API
 
-// ✅ 너가 배포한 GAS Web App URL을 넣어줘
-// 예: https://script.google.com/macros/s/XXXX/exec
-export const GAS_URL = "https://script.google.com/macros/s/AKfycbw3uVQs9-nLGMm_eOQAJkVF-Q_GudKkWyYqgu-KlrLtHHFNtSOBRNjOvrjw1eyuj-IMwQ/exec";
+const API = "/.netlify/functions/state";
 
 async function jfetch(url, opts = {}) {
-  const res = await fetch(url, {
-    cache: 'no-store',
-    ...opts // ⚠️ headers 절대 넣지 말 것
-  });
-  const text = await res.text();
-  if (!res.ok) throw new Error(text || `HTTP ${res.status}`);
-  return text ? JSON.parse(text) : null;
+  const res = await fetch(url, { cache: "no-store", ...opts });
+  const txt = await res.text();
+  if (!res.ok) throw new Error(txt);
+  return txt ? JSON.parse(txt) : null;
 }
 
-export function genRoomCode(){
-  return String(Math.floor(1000 + Math.random()*9000));
+export function genRoomCode() {
+  return String(Math.floor(1000 + Math.random() * 9000));
 }
 
-// ===== host / display가 기대하는 API 그대로 유지 =====
-
-export async function getState(roomCode){
-  const res = await jfetch(`${GAS_URL}?room=${encodeURIComponent(roomCode)}`);
-  if (!res || res.ok !== true) return null;
-  return res.state;
+export async function getState(roomCode) {
+  try {
+    const res = await jfetch(`${API}?room=${roomCode}`);
+    return res.state;
+  } catch {
+    return null;
+  }
 }
 
-export async function setState(roomCode, state){
+export async function setState(roomCode, state) {
   const payload = { ...state, roomCode };
-  return await jfetch(GAS_URL, {
-    method: 'POST',
-    body: JSON.stringify(payload) // text/plain
+  return await jfetch(API, {
+    method: "POST",
+    body: JSON.stringify(payload)
   });
 }
 
-export async function patchState(roomCode, patch){
-  const current = await getState(roomCode);
-  if (!current) return;
-  const next = { ...current, ...patch, roomCode };
-  return await setState(roomCode, next);
+export async function patchState(roomCode, patch) {
+  const cur = await getState(roomCode);
+  if (!cur) return;
+  return await setState(roomCode, { ...cur, ...patch });
 }
 
-// action 계열은 당장 안 쓰므로 더미 유지
-export async function pushAction(){ return; }
-export async function pullActions(){ return { actions: [] }; }
-export async function clearActions(){ return; }
+// 사용 안 하지만 인터페이스 유지
+export async function pushAction() {}
+export async function pullActions() { return { actions: [] }; }
+export async function clearActions() {}
