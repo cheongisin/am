@@ -5,54 +5,44 @@
 // 예: https://script.google.com/macros/s/XXXX/exec
 export const GAS_URL = "https://script.google.com/macros/s/AKfycbw3uVQs9-nLGMm_eOQAJkVF-Q_GudKkWyYqgu-KlrLtHHFNtSOBRNjOvrjw1eyuj-IMwQ/exec";
 
-function mustHaveUrl(){
-  if(!GAS_URL){
-    throw new Error('GAS_URL이 비어있습니다. js/gasApi.js의 GAS_URL을 설정하세요');
-  }
-}
-
-async function jfetch(url, opts={}){
+async function jfetch(url, opts = {}) {
   const res = await fetch(url, {
     cache: 'no-store',
-    headers: { 'Content-Type': 'application/json', ...(opts.headers||{}) },
-    ...opts,
+    ...opts // ⚠️ headers 절대 넣지 말 것
   });
   const text = await res.text();
-  if(!res.ok) throw new Error(text || `HTTP ${res.status}`);
-  if(!text) return null;
-  try{ return JSON.parse(text); }catch{ return text; }
+  if (!res.ok) throw new Error(text || `HTTP ${res.status}`);
+  return text ? JSON.parse(text) : null;
 }
 
 export function genRoomCode(){
   return String(Math.floor(1000 + Math.random()*9000));
 }
 
+// ===== host / display가 기대하는 API 그대로 유지 =====
+
 export async function getState(roomCode){
-  mustHaveUrl();
-  return await jfetch(`${GAS_URL}?op=state&room=${encodeURIComponent(roomCode)}`);
+  const res = await jfetch(`${GAS_URL}?room=${encodeURIComponent(roomCode)}`);
+  if (!res || res.ok !== true) return null;
+  return res.state;
 }
 
 export async function setState(roomCode, state){
-  mustHaveUrl();
-  return await jfetch(GAS_URL, { method:'POST', body: JSON.stringify({op:'setState', roomCode, state})});
+  const payload = { ...state, roomCode };
+  return await jfetch(GAS_URL, {
+    method: 'POST',
+    body: JSON.stringify(payload) // text/plain
+  });
 }
 
 export async function patchState(roomCode, patch){
-  mustHaveUrl();
-  return await jfetch(GAS_URL, { method:'POST', body: JSON.stringify({op:'patchState', roomCode, patch})});
+  const current = await getState(roomCode);
+  if (!current) return;
+  const next = { ...current, ...patch, roomCode };
+  return await setState(roomCode, next);
 }
 
-export async function pushAction(roomCode, action){
-  mustHaveUrl();
-  return await jfetch(GAS_URL, { method:'POST', body: JSON.stringify({op:'pushAction', roomCode, action})});
-}
-
-export async function pullActions(roomCode){
-  mustHaveUrl();
-  return await jfetch(`${GAS_URL}?op=actions&room=${encodeURIComponent(roomCode)}`);
-}
-
-export async function clearActions(roomCode, uptoId=null){
-  mustHaveUrl();
-  return await jfetch(GAS_URL, { method:'POST', body: JSON.stringify({op:'clearActions', roomCode, uptoId})});
-}
+// action 계열은 당장 안 쓰므로 더미 유지
+export async function pushAction(){ return; }
+export async function pullActions(){ return { actions: [] }; }
+export async function clearActions(){ return; }
