@@ -1,42 +1,88 @@
-// Netlify Functions API
+// Sync API layer (GAS or Netlify Functions compatible)
+// - Netlify 기본: /.netlify/functions/state
+// - GAS 사용 시: 아래 GAS_URL에 Web App URL 넣기
 
-const API = "/.netlify/functions/state";
+export const GAS_URL = ""; 
+// 예) "https://script.google.com/macros/s/XXXX/exec"
+// Netlify만 쓸 거면 빈 문자열로 둬도 됨.
 
-async function jfetch(url, opts = {}) {
-  const res = await fetch(url, { cache: "no-store", ...opts });
-  const txt = await res.text();
-  if (!res.ok) throw new Error(txt);
-  return txt ? JSON.parse(txt) : null;
+function apiBase(){
+  // GAS_URL이 설정돼 있으면 GAS 사용
+  if (typeof GAS_URL === "string" && GAS_URL.trim()) return GAS_URL.trim();
+  // 아니면 Netlify Functions 기본 경로 사용
+  return `${location.origin}/.netlify/functions/state`;
 }
 
-export function genRoomCode() {
-  return String(Math.floor(1000 + Math.random() * 9000));
-}
-
-export async function getState(roomCode) {
-  try {
-    const res = await jfetch(`${API}?room=${roomCode}`);
-    return res.state;
-  } catch {
-    return null;
-  }
-}
-
-export async function setState(roomCode, state) {
-  const payload = { ...state, roomCode };
-  return await jfetch(API, {
-    method: "POST",
-    body: JSON.stringify(payload)
+async function jfetch(url, opts={}){
+  const res = await fetch(url, {
+    cache: "no-store",
+    headers: { "Content-Type":"application/json", ...(opts.headers||{}) },
+    ...opts,
   });
+  const text = await res.text();
+  if(!res.ok) throw new Error(text || `HTTP ${res.status}`);
+  if(!text) return null;
+  try { return JSON.parse(text); } catch { return text; }
 }
 
-export async function patchState(roomCode, patch) {
-  const cur = await getState(roomCode);
-  if (!cur) return;
-  return await setState(roomCode, { ...cur, ...patch });
+export function genRoomCode(){
+  return String(Math.floor(1000 + Math.random()*9000));
 }
 
-// 사용 안 하지만 인터페이스 유지
-export async function pushAction() {}
-export async function pullActions() { return { actions: [] }; }
-export async function clearActions() {}
+// ✅ 핵심: {ok:true, state:{...}} 형태면 state를 꺼내서 반환
+export async function getState(roomCode){
+  const base = apiBase();
+
+  // GAS 모드: ?op=state&room=...
+  if (base.includes("script.google.com")) {
+    const res = await jfetch(`${base}?op=state&room=${encodeURIComponent(roomCode)}`);
+    // GAS가 혹시 래퍼로 주는 경우도 대비
+    return (res && res.state) ? res.state : res;
+  }
+
+  // Netlify 모드: ?room=...
+  const res = await jfetch(`${base}?room=${encodeURIComponent(roomCode)}`);
+  return (res && res.state) ? res.state : res;
+}
+
+export async function setState(roomCode, state){
+  const base = apiBase();
+  if (base.includes("script.google.com")) {
+    return await jfetch(base, { method:"POST", body: JSON.stringify({op:"setState", roomCode, state}) });
+  }
+  return await jfetch(base, { method:"POST", body: JSON.stringify({op:"setState", roomCode, state}) });
+}
+
+export async function patchState(roomCode, patch){
+  const base = apiBase();
+  if (base.includes("script.google.com")) {
+    return await jfetch(base, { method:"POST", body: JSON.stringify({op:"patchState", roomCode, patch}) });
+  }
+  return await jfetch(base, { method:"POST", body: JSON.stringify({op:"patchState", roomCode, patch}) });
+}
+
+export async function pushAction(roomCode, action){
+  const base = apiBase();
+  if (base.includes("script.google.com")) {
+    return await jfetch(base, { method:"POST", body: JSON.stringify({op:"pushAction", roomCode, action}) });
+  }
+  return await jfetch(base, { method:"POST", body: JSON.stringify({op:"pushAction", roomCode, action}) });
+}
+
+export async function pullActions(roomCode){
+  const base = apiBase();
+  if (base.includes("script.google.com")) {
+    const res = await jfetch(`${base}?op=actions&room=${encodeURIComponent(roomCode)}`);
+    return res;
+  }
+  const res = await jfetch(`${base}?op=actions&room=${encodeURIComponent(roomCode)}`);
+  return res;
+}
+
+export async function clearActions(roomCode, uptoId=null){
+  const base = apiBase();
+  if (base.includes("script.google.com")) {
+    return await jfetch(base, { method:"POST", body: JSON.stringify({op:"clearActions", roomCode, uptoId}) });
+  }
+  return await jfetch(base, { method:"POST", body: JSON.stringify({op:"clearActions", roomCode, uptoId}) });
+}
