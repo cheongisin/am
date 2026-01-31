@@ -19,10 +19,5 @@
 <body>
 <div id="app"></div>
 <script type="module" src="js/host.js"></script>
-<script>
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('./sw.js').catch(()=>{});
-}
-</script>
 </body>
 </html>
