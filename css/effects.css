@@ -6,6 +6,6 @@
 .event-caption{color:var(--muted)}
 .reveal{position:fixed; inset:0; z-index:160; background:rgba(0,0,0,.9);
   display:flex; align-items:center; justify-content:center; padding:14px}
-.reveal-inner{max-width:560px; width:100%; text-align:center}
+.reveal-inner{max-width:360px; width:100%; text-align:center}
 .reveal-inner img{width:100%; border-radius:16px; border:1px solid rgba(255,255,255,.1); box-shadow:var(--shadow)}
 .reveal-inner .who{margin-top:10px; color:var(--muted)}

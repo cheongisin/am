@@ -3,7 +3,6 @@ import {genRoomCode, getState, setState, patchState, pullActions, clearActions} 
 import {PHASE, ROLE, ROLE_LABEL} from '../src/constants.js';
 import {createGame, publicState, snapshot, undo} from '../src/gameState.js';
 import {journalistReveal} from '../src/journalist.js';
-import {tallyVotes, clearVotes} from '../src/vote.js';
 import {execute} from '../src/execution.js';
 import {checkWin} from '../src/win.js';
 import {resolveNight} from './nightResolve.js';
@@ -23,6 +22,56 @@ let pendingReporterReveal=null;
 let game = createGame(Array.from({length:8}).map((_,i)=>({id:i,name:`P${i+1}`})));
 let nightDraft=null;
 
+function formatTimer(seconds){
+  const s = Math.max(0, Number(seconds) || 0);
+  const m = Math.floor(s/60);
+  const r = s%60;
+  return `${String(m).padStart(2,'0')}:${String(r).padStart(2,'0')}`;
+}
+function getTimerRemaining(timer){
+  if(!timer || timer.mode!=='COUNTDOWN') return null;
+  if(timer.running && timer.endAt){
+    return Math.max(0, Math.ceil((timer.endAt - Date.now())/1000));
+  }
+  return Math.max(0, Math.floor(timer.durationSec || 0));
+}
+function setTimerInfinite(){
+  game.timer = {mode:'INFINITE', durationSec:0, endAt:null, running:false};
+}
+function setTimerStopped(){
+  game.timer = {mode:'STOPPED', durationSec:0, endAt:null, running:false};
+}
+function resetTimerForPhase(){
+  if([PHASE.NIGHT, PHASE.VOTE, PHASE.EXECUTION].includes(game.phase)) setTimerInfinite();
+  else setTimerStopped();
+}
+
+function startCountdown(seconds, {record=true} = {}){
+  const s = Math.max(0, Number(seconds) || 0);
+  if(record) snapshot(game);
+  game.timer = {mode:'COUNTDOWN', durationSec: s, endAt: Date.now() + s*1000, running:true};
+  game.timerConfig.daySec = s;
+}
+
+function pauseCountdown(){
+  if(game.timer?.mode!=='COUNTDOWN' || !game.timer?.running) return;
+  const remaining = getTimerRemaining(game.timer);
+  snapshot(game);
+  game.timer = {mode:'COUNTDOWN', durationSec: remaining, endAt: null, running:false};
+}
+
+function resumeCountdown(){
+  if(game.timer?.mode!=='COUNTDOWN' || game.timer?.running) return;
+  const s = Math.max(0, Number(game.timer.durationSec) || 0);
+  snapshot(game);
+  game.timer = {mode:'COUNTDOWN', durationSec: s, endAt: Date.now() + s*1000, running:true};
+}
+
+function resetTimerManual(){
+  snapshot(game);
+  resetTimerForPhase();
+}
+
 function shuffle(arr){
   const a=[...arr];
   for(let i=a.length-1;i>0;i--){
@@ -32,7 +81,7 @@ function shuffle(arr){
   return a;
 }
 function rolePoolFor(n){
-  const pool=[ROLE.MAFIA, ROLE.POLICE, ROLE.DOCTOR, ROLE.REPORTER, ROLE.DETECTIVE, ROLE.TERRORIST, ROLE.SPY];
+  const pool=[ROLE.MAFIA, ROLE.SPY, ROLE.POLICE, ROLE.DOCTOR, ROLE.SOLDIER, ROLE.REPORTER, ROLE.POLITICIAN, ROLE.TERRORIST, ROLE.DETECTIVE, ROLE.ARMY];
   while(pool.length<n) pool.push(ROLE.CITIZEN);
   return pool.slice(0,n);
 }
@@ -71,12 +120,8 @@ async function startRoom(code){
   roomCode = String(code||'').trim();
   if(!/^\d{4}$/.test(roomCode)) throw new Error('4자리 코드가 필요합니다.');
 
-  // 상태가 없으면 새로 생성(호스트 기준)
-  let st=null;
-  try{ st = await getState(roomCode); }catch{}
-  if(!st || !st.phase){
-    await sync();
-  }
+  // 상태 갱신 (호스트 기준)
+  await sync();
 
   // 폴링 시작
   if(hostBeatTimer) clearInterval(hostBeatTimer);
@@ -94,9 +139,9 @@ async function pollActions(){
     const res = await pullActions(roomCode);
     const actions = (res && res.actions) ? res.actions : [];
     if(!actions.length) {
-      // 연결 판정: 진행자 heartbeat가 최근 6초 이내면 connected
+      // 연결 판정: 진행자 heartbeat가 최근 5초 이내면 connected
       const st = await getState(roomCode);
-      const ok = st?.clientHeartbeat && (Date.now()-st.clientHeartbeat < 6500);
+      const ok = st?.clientHeartbeat && (Date.now()-st.clientHeartbeat < 5000);
       setConnected(!!ok);
       renderBadgeOnly();
       return;
@@ -127,10 +172,13 @@ function renderBadgeOnly(){
 
 function render(){
   const aliveCount = game.players.filter(p=>p.alive).length;
+  const remaining = getTimerRemaining(game.timer);
+  const timerText = game.timer?.mode==='INFINITE' ? '∞' : (game.timer?.mode==='COUNTDOWN' ? formatTimer(remaining) : '--:--');
   app.innerHTML = `
   <div class="topbar"><div class="topbar-inner">
     <div class="actions">
       <span class="badge night">${game.phase} ${game.phase===PHASE.NIGHT?`N${game.night}`:''}</span>
+      <span class="badge">타이머 ${timerText}</span>
       <span class="badge">생존 ${aliveCount}/${game.players.length}</span>
       <span class="badge" id="connBadge">연결 ${connected?'🟢':'🔴'}</span>
       <span class="badge">방코드 ${roomCode? `<b>${roomCode}</b>` : '-'}</span>
@@ -241,6 +289,11 @@ function render(){
   app.querySelector('#phaseSel').onchange=()=>{
     snapshot(game);
     game.phase = app.querySelector('#phaseSel').value;
+    if(game.phase===PHASE.DAY && game.timerConfig?.daySec){
+      startCountdown(game.timerConfig.daySec, {record:false});
+    }else{
+      resetTimerForPhase();
+    }
     if(game.phase===PHASE.NIGHT) initNightDraft();
     sync(); render();
   };
@@ -250,8 +303,10 @@ function render(){
     if(!ok) return;
     snapshot(game);
     game.phase=PHASE.DEAL;
+    setTimerStopped();
     game.winner=null;
-    game.players.forEach(p=>{ p.role=null; p.publicCard='CITIZEN'; p.alive=true; p.assigned=false; p.terroristTarget=null; });
+    game.players.forEach(p=>{ p.role=null; p.publicCard='CITIZEN'; p.alive=true; p.assigned=false; p.armorUsed=false; p.terroristTarget=null; });
+    game.reporterUsedOnce=false;
     game.deck = shuffle(rolePoolFor(game.players.length));
     game.deckUsed = Array.from({length:game.players.length}).map(()=>false);
     // 진행자는 state.phase === DEAL로 판단하므로 별도 메시지 불필요
@@ -263,9 +318,11 @@ function render(){
     if(!ok) return;
     snapshot(game);
     game.phase=PHASE.SETUP;
+    setTimerStopped();
     game.winner=null;
     game.votes={};
     game.executionTarget=null;
+    game.reporterUsedOnce=false;
     pendingReporterReveal=null;
     sync(); render();
   };
@@ -286,12 +343,53 @@ function render(){
 }
 
 function buildControlPanel(){
+  return `
+    <div style="display:flex;flex-direction:column;gap:12px">
+      ${buildTimerPanel()}
+      ${buildPhasePanel()}
+    </div>
+  `;
+}
+
+function buildTimerPanel(){
+  const remaining = getTimerRemaining(game.timer);
+  const timerText = game.timer?.mode==='INFINITE' ? '∞' : (game.timer?.mode==='COUNTDOWN' ? formatTimer(remaining) : '--:--');
+  const disabled = connected ? '' : 'disabled';
+  const running = game.timer?.mode==='COUNTDOWN' && game.timer?.running;
+  const paused = game.timer?.mode==='COUNTDOWN' && !game.timer?.running;
+  return `
+    <div>
+      <h4 style="margin:0 0 6px">타이머</h4>
+      <div class="actions">
+        <span class="badge">현재 ${timerText}</span>
+      </div>
+      <div class="grid cols2" style="margin-top:8px">
+        <div><label>분</label><input id="timerMin" type="number" min="0" value="3"></div>
+        <div><label>초</label><input id="timerSec" type="number" min="0" max="59" value="0"></div>
+      </div>
+      <div class="actions" style="margin-top:8px">
+        <button id="timerStart" ${disabled}>시작</button>
+        <button id="timerPause" ${disabled || !running ? 'disabled' : ''}>일시정지</button>
+        <button id="timerResume" ${disabled || !paused ? 'disabled' : ''}>재개</button>
+        <button id="timerStop" ${disabled}>리셋</button>
+      </div>
+      <div class="actions" style="margin-top:6px">
+        <button class="timerPreset" data-sec="300" ${disabled}>낮 5분</button>
+        <button class="timerPreset" data-sec="120" ${disabled}>투표 2분</button>
+      </div>
+      <p class="muted small">밤은 무한대로 표시되며 스킵 가능합니다.</p>
+    </div>
+  `;
+}
+
+function buildPhasePanel(){
   if(game.winner){
     return `<p class="muted">게임 종료: <b>${game.winner}</b></p>`;
   }
   if(game.phase===PHASE.DEAL){
     return `<p class="muted">배정 진행: ${game.players.filter(p=>p.assigned).length}/${game.players.length}</p>`;
   }
+  const disabled = connected ? '' : 'disabled';
   if(game.phase===PHASE.NIGHT){
     if(!nightDraft) initNightDraft();
     return `
@@ -306,39 +404,41 @@ function buildControlPanel(){
           ${sel('테러리스트 지목', nightDraft.terroristId, 'terroristTarget', true)}
         </div>
       </div>
-      <div class="actions" style="margin-top:10px"><button class="primary" id="nightResolve">밤 확정 → DAY</button></div>
+      <div class="actions" style="margin-top:10px"><button class="primary" id="nightResolve" ${disabled}>밤 확정 → DAY</button></div>
     `;
   }
   if(game.phase===PHASE.DAY){
     return `
       <p class="muted">낮 토론</p>
       <div class="actions">
-        <button class="primary" id="toVote">투표로 이동</button>
-        <button id="skipDay">토론 스킵</button>
-        <button id="manualReveal">기자 공개(수동)</button>
+        <button class="primary" id="toVote" ${disabled}>투표로 이동</button>
+        <button id="skipDay" ${disabled}>토론 스킵</button>
+        <button id="manualReveal" ${disabled}>기자 공개(수동)</button>
       </div>
     `;
   }
   if(game.phase===PHASE.VOTE){
-    const target = tallyVotes(game);
+    const alive = game.players.filter(p=>p.alive);
+    const selected = game.executionTarget ?? alive[0]?.id ?? null;
     return `
-      <p class="muted">투표</p>
-      <div class="actions">
-        <button class="primary" id="tallyBtn">집계 → 처형</button>
-        <button id="invBtn">무효 → 처형</button>
-        <button id="clearBtn">투표 초기화</button>
+      <p class="muted">최후 변론 대상 선택</p>
+      <label>단두대 대상</label>
+      <select id="accusedSel" ${disabled}>
+        ${alive.map(p=>`<option value="${p.id}" ${p.id===selected?'selected':''}>${p.name}</option>`).join('')}
+      </select>
+      <div class="actions" style="margin-top:10px">
+        <button class="primary" id="startDefense" ${disabled}>최후 변론 시작</button>
       </div>
-      <p class="muted small">미확정 집계: ${target===null?'동점/무효':(game.players.find(p=>p.id==target)?.name ?? '-')}</p>
     `;
   }
   if(game.phase===PHASE.EXECUTION){
     const t=game.executionTarget;
     const name = (t==null)? '무효(처형 없음)' : (game.players.find(p=>p.id==t)?.name ?? '-');
     return `
-      <p class="muted">처형 단계: <b>${name}</b></p>
+      <p class="muted">투표 진행 중: <b>${name}</b></p>
       <div class="actions">
-        <button class="primary" id="execConfirm">처형 확정</button>
-        <button id="execCancel">처형 취소(무효)</button>
+        <button class="primary" id="execConfirm" ${disabled}>처형 확정</button>
+        <button id="execCancel" ${disabled}>무효 → 밤으로</button>
       </div>
     `;
   }
@@ -347,6 +447,50 @@ function buildControlPanel(){
 
 function wireControlPanel(){
   if(game.winner) return;
+
+  const timerStart = app.querySelector('#timerStart');
+  if(timerStart){
+    timerStart.onclick=async()=>{
+      const min = Number(app.querySelector('#timerMin')?.value || 0);
+      const sec = Number(app.querySelector('#timerSec')?.value || 0);
+      const total = Math.max(0, min*60 + sec);
+      startCountdown(total);
+      await sync();
+      render();
+    };
+  }
+  const timerPause = app.querySelector('#timerPause');
+  if(timerPause){
+    timerPause.onclick=async()=>{
+      pauseCountdown();
+      await sync();
+      render();
+    };
+  }
+  const timerResume = app.querySelector('#timerResume');
+  if(timerResume){
+    timerResume.onclick=async()=>{
+      resumeCountdown();
+      await sync();
+      render();
+    };
+  }
+  const timerStop = app.querySelector('#timerStop');
+  if(timerStop){
+    timerStop.onclick=async()=>{
+      resetTimerManual();
+      await sync();
+      render();
+    };
+  }
+  app.querySelectorAll('.timerPreset').forEach(btn=>{
+    btn.onclick=async()=>{
+      const sec = Number(btn.dataset.sec || 0);
+      startCountdown(sec);
+      await sync();
+      render();
+    };
+  });
 
   if(game.phase===PHASE.NIGHT){
     app.querySelectorAll('select[data-key]').forEach(s=>{
@@ -373,12 +517,17 @@ function wireControlPanel(){
       const res = resolveNight(game, nightDraft);
       res.dead.forEach(id=>{ if(game.players[id]) game.players[id].alive=false; });
       // 아침 연출 이벤트
-      game.fx = { token: Date.now(), events: res.events||[] };
+      game.eventQueue = { token: Date.now(), events: res.events||[] };
       pendingReporterReveal = res.reporterRevealTarget;
       game.phase=PHASE.DAY;
+      if(game.timerConfig?.daySec){
+        startCountdown(game.timerConfig.daySec, {record:false});
+      }else{
+        setTimerStopped();
+      }
       game.votes={}; game.executionTarget=null;
       const winner=checkWin(game);
-      if(winner){ game.phase=PHASE.END; game.winner=winner; }
+      if(winner){ game.phase=PHASE.END; game.winner=winner; setTimerStopped(); }
       sync(); render();
     };
     return;
@@ -390,6 +539,8 @@ function wireControlPanel(){
       if(!ok) return;
       snapshot(game);
       game.phase=PHASE.VOTE;
+      game.executionTarget=null;
+      setTimerInfinite();
       sync(); render();
     };
     app.querySelector('#skipDay').onclick=async()=>{
@@ -397,6 +548,8 @@ function wireControlPanel(){
       if(!ok) return;
       snapshot(game);
       game.phase=PHASE.VOTE;
+      game.executionTarget=null;
+      setTimerInfinite();
       sync(); render();
     };
     app.querySelector('#manualReveal').onclick=async()=>{
@@ -414,30 +567,14 @@ function wireControlPanel(){
   }
 
   if(game.phase===PHASE.VOTE){
-    app.querySelector('#tallyBtn').onclick=async()=>{
-      const ok = await modalConfirm('투표 집계','집계하고 처형 단계로 이동할까요?');
+    app.querySelector('#startDefense').onclick=async()=>{
+      const ok = await modalConfirm('최후 변론','최후 변론을 시작할까요?');
       if(!ok) return;
       snapshot(game);
-      const target = tallyVotes(game);
-      game.executionTarget = (target===null? null : Number(target));
+      const sel = app.querySelector('#accusedSel');
+      game.executionTarget = sel ? Number(sel.value) : null;
       game.phase=PHASE.EXECUTION;
-      game.fx = { token: Date.now(), events:[{type:'VOTE'}] };
-      sync(); render();
-    };
-    app.querySelector('#invBtn').onclick=async()=>{
-      const ok = await modalConfirm('무효 처리','무효로 처리하고 처형 단계로 이동할까요?');
-      if(!ok) return;
-      snapshot(game);
-      game.executionTarget=null;
-      game.phase=PHASE.EXECUTION;
-      game.fx = { token: Date.now(), events:[{type:'VOTE'}] };
-      sync(); render();
-    };
-    app.querySelector('#clearBtn').onclick=async()=>{
-      const ok = await modalConfirm('투표 초기화','투표를 초기화할까요?');
-      if(!ok) return;
-      snapshot(game);
-      clearVotes(game);
+      setTimerInfinite();
       sync(); render();
     };
     return;
@@ -454,17 +591,17 @@ function wireControlPanel(){
       }
       const evs=[{type:'EXECUTION'}];
       if(result.chain.length) evs.push({type:'TERROR_CHAIN'});
-      game.fx = { token: Date.now(), events: evs };
+      game.eventQueue = { token: Date.now(), events: evs };
       const winner=checkWin(game);
-      if(winner){ game.phase=PHASE.END; game.winner=winner; }
-      else { game.night+=1; game.phase=PHASE.NIGHT; game.votes={}; game.executionTarget=null; initNightDraft(); }
+      if(winner){ game.phase=PHASE.END; game.winner=winner; setTimerStopped(); }
+      else { game.night+=1; game.phase=PHASE.NIGHT; setTimerInfinite(); game.votes={}; game.executionTarget=null; initNightDraft(); }
       sync(); render();
     };
     app.querySelector('#execCancel').onclick=async()=>{
       const ok = await modalConfirm('처형 취소','처형 없이 다음 밤으로 넘어갈까요?');
       if(!ok) return;
       snapshot(game);
-      game.night+=1; game.phase=PHASE.NIGHT; game.votes={}; game.executionTarget=null; initNightDraft();
+      game.night+=1; game.phase=PHASE.NIGHT; setTimerInfinite(); game.votes={}; game.executionTarget=null; initNightDraft();
       sync(); render();
     };
     return;
@@ -487,14 +624,14 @@ function reporterBlock(){
   const rid = nightDraft.reporterId;
   const actor = rid!=null ? game.players[rid] : null;
   if(!actor || !actor.alive) return `<p class="muted small">기자: 사용 불가</p>`;
-  const disabled = game.night < 2;
+  const disabled = game.night < 2 || game.reporterUsedOnce;
   const checked = nightDraft.reporterUsed && !disabled;
   const opts = game.players.filter(p=>p.alive && p.id!==rid).map(p=>`<option value="${p.id}" ${nightDraft.reporterTarget===p.id?'selected':''}>${p.name}</option>`).join('');
   return `
     <label>기자 특보 <span class="muted small">(${actor.name})</span></label>
     <div class="actions" style="margin:6px 0">
       <input id="repUsed" type="checkbox" style="width:auto" ${checked?'checked':''} ${disabled?'disabled':''}>
-      <span class="muted small">${disabled?'첫밤 불가':'사용'}</span>
+      <span class="muted small">${game.reporterUsedOnce?'이미 사용함':(disabled?'첫밤 불가':'사용')}</span>
     </div>
     <select data-key="reporterTarget" ${checked?'':'disabled'}>
       <option value="">대상 선택</option>
@@ -527,13 +664,14 @@ async function onAction(action){
     const role = game.deck[cardIndex];
     game.deckUsed[cardIndex]=true;
     p.role=role; p.assigned=true;
-    // 공개/연출: fx 이벤트로 전달 (display가 token 기준으로 1회만 재생)
-    game.fx = { token: Date.now(), events: [{type:'DEAL_REVEAL', playerId, role, cardIndex}] };
+    // 공개/연출: eventQueue로 전달 (display가 token 기준으로 1회만 재생)
+    game.eventQueue = { token: Date.now(), events: [{type:'DEAL_REVEAL', playerId, role, cardIndex}] };
     await sync();
     render();
     if(game.players.every(x=>x.assigned)){
       snapshot(game);
       game.phase=PHASE.NIGHT;
+      setTimerInfinite();
       initNightDraft();
       await sync();
       render();
@@ -541,11 +679,6 @@ async function onAction(action){
   }
 
   if(msg.type==='VOTE'){
-    // 투표는 display에서 보내고, host가 game.votes에 반영
-    const {voterId, targetId} = msg;
-    if(game.phase!==PHASE.VOTE) return;
-    snapshot(game);
-    game.votes[String(voterId)] = (targetId==null? null : Number(targetId));
     return;
   }
 }

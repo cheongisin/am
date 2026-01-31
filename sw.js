@@ -1,4 +1,4 @@
-const CACHE_NAME = "mafia42-pwa-v3b-1";
+const CACHE_NAME = "mafia42-pwa-v3b-3";
 const ASSETS = [
   "./",
   "./index.html",
@@ -11,7 +11,6 @@ const ASSETS = [
   "./css/effects.css",
   "./js/host.js",
   "./js/display.js",
-  "./js/webrtc.js",
   "./js/util.js",
   "./js/nightResolve.js",
   "./src/constants.js",
