@@ -1,71 +1,88 @@
 // Google Apps Script (GAS) sync layer
-// ✅ CORS preflight(OPTIONS) 회피 버전: application/json 헤더 안씀 (URLSearchParams 사용)
+// ✅ 응답이 {ok:true, state:{...}} 형태로 오는 걸 자동으로 풀어서 반환
 
-export const GAS_URL =
-  "https://script.google.com/macros/s/AKfycbyK1_LzmRSiv4iFAeN5xuU_vFpXj1GgfP5TEHVJ-5xREQvJ_4pCJGql0hR8E-ATakt_mg/exec";
+export const GAS_URL = "https://script.google.com/macros/s/AKfycbyK1_LzmRSiv4iFAeN5xuU_vFpXj1GgfP5TEHVJ-5xREQvJ_4pCJGql0hR8E-ATakt_mg/exec";
 
-function mustHaveUrl() {
-  if (!GAS_URL) throw new Error("GAS_URL이 비어있습니다.");
+function mustHaveUrl(){
+  if(!GAS_URL){
+    throw new Error('GAS_URL이 비어있습니다. js/gasApi.js의 GAS_URL을 설정하세요');
+  }
 }
 
-async function jget(params) {
-  mustHaveUrl();
-  const url = `${GAS_URL}?${new URLSearchParams(params).toString()}`;
-  const res = await fetch(url, { cache: "no-store" });
-  const text = await res.text();
-  if (!res.ok) throw new Error(text || `HTTP ${res.status}`);
-  try { return JSON.parse(text); } catch { return text; }
-}
-
-async function jpost(params) {
-  mustHaveUrl();
-
-  // ✅ form-url-encoded 로 보내면 preflight(OPTIONS) 없이 바로 POST됨
-  const body = new URLSearchParams();
-  Object.entries(params).forEach(([k, v]) => {
-    if (v === undefined || v === null) return;
-    body.set(k, typeof v === "string" ? v : JSON.stringify(v));
-  });
-
-  const res = await fetch(GAS_URL, {
-    method: "POST",
-    cache: "no-store",
-    body,
+async function jfetch(url, opts={}){
+  const res = await fetch(url, {
+    cache: 'no-store',
+    headers: { 'Content-Type': 'application/json', ...(opts.headers||{}) },
+    ...opts,
   });
 
   const text = await res.text();
-  if (!res.ok) throw new Error(text || `HTTP ${res.status}`);
-  try { return JSON.parse(text); } catch { return text; }
+  if(!res.ok) throw new Error(text || `HTTP ${res.status}`);
+  if(!text) return null;
+
+  let data;
+  try { data = JSON.parse(text); }
+  catch { data = text; }
+
+  // ✅ GAS 표준 응답 처리: {ok:false,...}면 throw
+  if (data && typeof data === 'object' && 'ok' in data) {
+    if (!data.ok) throw new Error(data.error || 'GAS error');
+  }
+
+  return data;
 }
 
-export function genRoomCode() {
-  return String(Math.floor(1000 + Math.random() * 9000));
+// ✅ 여기서 state를 자동으로 꺼내서 반환
+function unwrapState(resp){
+  if(resp && typeof resp === 'object' && 'state' in resp) return resp.state;
+  return resp;
 }
 
-export async function ping() {
-  return await jget({ op: "ping" });
+export function genRoomCode(){
+  return String(Math.floor(1000 + Math.random()*9000));
 }
 
-export async function getState(roomCode) {
-  return await jget({ op: "state", room: String(roomCode) });
+export async function getState(roomCode){
+  mustHaveUrl();
+  const resp = await jfetch(`${GAS_URL}?op=state&room=${encodeURIComponent(roomCode)}`);
+  return unwrapState(resp);
 }
 
-export async function setState(roomCode, state) {
-  return await jpost({ op: "setState", roomCode: String(roomCode), state });
+export async function setState(roomCode, state){
+  mustHaveUrl();
+  return await jfetch(GAS_URL, {
+    method:'POST',
+    body: JSON.stringify({op:'setState', roomCode, state})
+  });
 }
 
-export async function patchState(roomCode, patch) {
-  return await jpost({ op: "patchState", roomCode: String(roomCode), patch });
+export async function patchState(roomCode, patch){
+  mustHaveUrl();
+  return await jfetch(GAS_URL, {
+    method:'POST',
+    body: JSON.stringify({op:'patchState', roomCode, patch})
+  });
 }
 
-export async function pushAction(roomCode, action) {
-  return await jpost({ op: "pushAction", roomCode: String(roomCode), action });
+export async function pushAction(roomCode, action){
+  mustHaveUrl();
+  return await jfetch(GAS_URL, {
+    method:'POST',
+    body: JSON.stringify({op:'pushAction', roomCode, action})
+  });
 }
 
-export async function pullActions(roomCode) {
-  return await jget({ op: "actions", room: String(roomCode) });
+export async function pullActions(roomCode){
+  mustHaveUrl();
+  const resp = await jfetch(`${GAS_URL}?op=actions&room=${encodeURIComponent(roomCode)}`);
+  // actions는 서버 구현에 따라 {ok:true,actions:[...]}일 수 있음
+  return (resp && resp.actions) ? resp.actions : resp;
 }
 
-export async function clearActions(roomCode, uptoId = null) {
-  return await jpost({ op: "clearActions", roomCode: String(roomCode), uptoId });
+export async function clearActions(roomCode, uptoId=null){
+  mustHaveUrl();
+  return await jfetch(GAS_URL, {
+    method:'POST',
+    body: JSON.stringify({op:'clearActions', roomCode, uptoId})
+  });
 }
