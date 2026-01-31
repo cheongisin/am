@@ -3,11 +3,11 @@
 
 // ✅ 너가 배포한 GAS Web App URL을 넣어줘
 // 예: https://script.google.com/macros/s/XXXX/exec
-export const GAS_URL = window.__GAS_URL__ || '';
+export const GAS_URL = window.__https://script.google.com/macros/s/AKfycbwd2haaD4efa1cgHBOhD9oW7KjUYgUtl4yj0ytupTWEi3nxrGjSKi4iluryKj34cQ_7aQ/exec__ || '';
 
 function mustHaveUrl(){
   if(!GAS_URL){
-    throw new Error('https://script.google.com/macros/s/AKfycbwd2haaD4efa1cgHBOhD9oW7KjUYgUtl4yj0ytupTWEi3nxrGjSKi4iluryKj34cQ_7aQ/exec');
+    throw new Error('GAS_URL이 비어있습니다. js/gasApi.js의 GAS_URL을 설정하세요');
   }
 }
 
