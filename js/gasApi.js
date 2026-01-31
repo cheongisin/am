@@ -2,7 +2,7 @@
 // ✅ CORS preflight(OPTIONS) 회피 버전: application/json 헤더 안씀 (URLSearchParams 사용)
 
 export const GAS_URL =
-  "https://script.google.com/macros/s/AKfycby21uL-nW6YVdLtouiP4zmR5-Jsi_02RLAJuufla4Sji7uX4wSW2_4Z7eG-C3YEg5hdzw/exec";
+  "https://script.google.com/macros/s/AKfycbyK1_LzmRSiv4iFAeN5xuU_vFpXj1GgfP5TEHVJ-5xREQvJ_4pCJGql0hR8E-ATakt_mg/exec";
 
 function mustHaveUrl() {
   if (!GAS_URL) throw new Error("GAS_URL이 비어있습니다.");
