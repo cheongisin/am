@@ -195,12 +195,17 @@ async function connectToRoom(code){
       render();
       return;
     }
-    if(!st.hostHeartbeat || (Date.now()-st.hostHeartbeat > 35000)){
-      connected=false;
-      alert('사회자 연결이 감지되지 않습니다. 잠시 후 다시 시도하세요.');
-      render();
-      return;
-    }
+    // ✅ 접속 자체는 허용하고, 뱃지만 빨간/초록으로 판단한다
+    const HOST_TIMEOUT = 60000; // 60초 (모바일 안정)
+    const hostOk = !!(st.hostHeartbeat && (Date.now() - st.hostHeartbeat < HOST_TIMEOUT));
+
+    connected = true; // 접속 자체는 성공 처리
+    if(!hostOk){
+      // 알림으로 막지 말고, 화면은 유지 + 뱃지만 빨간불로 둔다
+      // (host가 살아나면 다음 poll에서 자동 초록불 됨)
+}
+    
+    
     connected=true;
     await patchState(roomCode, {clientHeartbeat: Date.now()});
     state = st;
