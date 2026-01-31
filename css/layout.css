@@ -1,0 +1,34 @@
+.board{display:flex;flex-direction:column;gap:12px;align-items:center;padding:14px}
+.hud{width:min(92vw, 820px);display:flex;gap:10px;justify-content:space-between;flex-wrap:wrap}
+.table{
+  width:min(92vw, 820px); height:min(92vw, 820px);
+  border-radius:50%;
+  background:radial-gradient(circle at 50% 38%, #1b2545 0%, #020617 70%);
+  border:1px solid rgba(255,255,255,.06);
+  box-shadow: var(--shadow);
+  position:relative;
+}
+.seat{position:absolute; width:108px; transform:translate(-50%,-50%); text-align:center}
+@media (max-width: 420px){ .seat{width:92px} }
+.seat .imgwrap{position:relative}
+.seat img{width:100%; border-radius:12px; border:1px solid var(--border); transition:transform .25s ease}
+.seat .name{margin-top:6px;font-size:.85rem}
+.seat.dead img{filter:grayscale(100%) brightness(.45)}
+.seat.dead .imgwrap::after{
+  content:"✕"; position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+  font-size:3.8rem; color:rgba(220,38,38,.75); font-weight:900;
+}
+
+/* Dealing */
+.dealwrap{max-width:1100px;margin:0 auto;padding:14px}
+.deck{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+@media(min-width:900px){ .deck{grid-template-columns:repeat(4,1fr);} }
+.cardbtn{border-radius:14px;border:1px solid rgba(255,255,255,.08);background:rgba(15,23,42,.55);padding:8px;cursor:pointer}
+.cardbtn img{width:100%;border-radius:12px;border:1px solid var(--border)}
+.cardbtn.used{opacity:.35; cursor:not-allowed}
+
+/* Vote panel */
+.voteGrid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+@media(min-width:900px){ .voteGrid{grid-template-columns:repeat(3,1fr);} }
+.pill{padding:10px;border:1px solid rgba(255,255,255,.08);border-radius:14px;background:rgba(15,23,42,.55);cursor:pointer;text-align:center}
+.pill.disabled{opacity:.35;cursor:not-allowed}

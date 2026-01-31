@@ -1,0 +1,44 @@
+.center{display:flex;align-items:center;justify-content:center}
+.stack{display:flex;flex-direction:column;gap:14px;align-items:center;padding:18px}
+.row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+.title{margin:0}
+.muted{color:var(--muted);margin:0}
+.small{font-size:.9rem}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;
+  padding:12px 16px;border-radius:12px;border:1px solid var(--border);
+  background:rgba(15,23,42,.65); box-shadow:var(--shadow); text-decoration:none; color:inherit;}
+.btn.primary{background:linear-gradient(135deg, rgba(201,162,77,.95), rgba(201,162,77,.65));
+  color:#111; border-color:rgba(201,162,77,.8)}
+
+.app{padding:14px;max-width:1200px;margin:0 auto}
+.topbar{position:sticky;top:0;z-index:50;background:rgba(2,6,23,.72);backdrop-filter: blur(10px); border-bottom:1px solid var(--border)}
+.topbar-inner{display:flex;gap:10px;align-items:center;justify-content:space-between;padding:10px 14px}
+.badge{padding:6px 10px;border:1px solid var(--border);border-radius:999px;background:rgba(15,23,42,.55)}
+.badge.night{color:var(--night)}
+.actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+button{
+  padding:10px 14px;border-radius:12px;border:1px solid var(--border);
+  background:rgba(15,23,42,.65); color:var(--text); cursor:pointer;
+}
+button.primary{background:linear-gradient(135deg, rgba(201,162,77,.95), rgba(201,162,77,.65));
+  color:#111; border-color:rgba(201,162,77,.8)}
+button.danger{background:rgba(220,38,38,.2); border-color:rgba(220,38,38,.5)}
+button:disabled{opacity:.45; cursor:not-allowed}
+label{display:block;color:var(--muted);margin:10px 0 6px}
+input,select,textarea{
+  width:100%; padding:10px 12px; border-radius:12px; border:1px solid var(--border);
+  background:rgba(2,6,23,.85); color:var(--text); outline:none;
+}
+textarea{min-height:88px; resize:vertical}
+.card{background:rgba(15,23,42,.65);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);padding:12px}
+.grid{display:grid;gap:12px}
+@media (min-width: 980px){ .grid.cols2{grid-template-columns: 1fr 1fr} }
+
+/* Modal */
+.modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;z-index:200}
+.modal{width:min(560px, calc(100% - 22px)); background:rgba(15,23,42,.92); border:1px solid var(--border);
+  border-radius:16px; box-shadow:var(--shadow); padding:14px}
+.modal h3{margin:0 0 8px 0}
+.modal p{margin:0 0 10px 0; color:var(--muted)}
+.modal .actions{justify-content:flex-end}
