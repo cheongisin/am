@@ -3,7 +3,7 @@
 
 // ✅ 너가 배포한 GAS Web App URL을 넣어줘
 // 예: https://script.google.com/macros/s/XXXX/exec
-export const GAS_URL = https://script.google.com/macros/s/AKfycbw3uVQs9-nLGMm_eOQAJkVF-Q_GudKkWyYqgu-KlrLtHHFNtSOBRNjOvrjw1eyuj-IMwQ/exec || '';
+export const GAS_URL = "https://script.google.com/macros/s/AKfycbw3uVQs9-nLGMm_eOQAJkVF-Q_GudKkWyYqgu-KlrLtHHFNtSOBRNjOvrjw1eyuj-IMwQ/exec";
 
 function mustHaveUrl(){
   if(!GAS_URL){
