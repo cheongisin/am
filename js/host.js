@@ -141,7 +141,7 @@ async function pollActions(){
     if(!actions.length) {
       // 연결 판정: 진행자 heartbeat가 최근 5초 이내면 connected
       const st = await getState(roomCode);
-      const ok = st?.clientHeartbeat && (Date.now()-st.clientHeartbeat < 5000);
+      const ok = st?.clientHeartbeat && (Date.now()-st.clientHeartbeat < 15000);
       setConnected(!!ok);
       renderBadgeOnly();
       return;
