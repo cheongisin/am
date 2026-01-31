@@ -195,7 +195,7 @@ async function connectToRoom(code){
       render();
       return;
     }
-    if(!st.hostHeartbeat || (Date.now()-st.hostHeartbeat > 5000)){
+    if(!st.hostHeartbeat || (Date.now()-st.hostHeartbeat > 35000)){
       connected=false;
       alert('사회자 연결이 감지되지 않습니다. 잠시 후 다시 시도하세요.');
       render();
