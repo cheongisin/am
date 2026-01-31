@@ -1,48 +1,71 @@
-// GAS JSON API (CORS-safe)
+// Google Apps Script (GAS) sync layer
+// ✅ CORS preflight(OPTIONS) 회피 버전: application/json 헤더 안씀 (URLSearchParams 사용)
 
 export const GAS_URL =
   "https://script.google.com/macros/s/AKfycby21uL-nW6YVdLtouiP4zmR5-Jsi_02RLAJuufla4Sji7uX4wSW2_4Z7eG-C3YEg5hdzw/exec";
 
-/* ===== Utils ===== */
-async function jget(url) {
-  const res = await fetch(url, { cache: 'no-store' });
-  const text = await res.text();
-  try { return JSON.parse(text); }
-  catch { return { ok:false, error:'bad_response', raw:text }; }
+function mustHaveUrl() {
+  if (!GAS_URL) throw new Error("GAS_URL이 비어있습니다.");
 }
 
-/* ===== API ===== */
+async function jget(params) {
+  mustHaveUrl();
+  const url = `${GAS_URL}?${new URLSearchParams(params).toString()}`;
+  const res = await fetch(url, { cache: "no-store" });
+  const text = await res.text();
+  if (!res.ok) throw new Error(text || `HTTP ${res.status}`);
+  try { return JSON.parse(text); } catch { return text; }
+}
+
+async function jpost(params) {
+  mustHaveUrl();
+
+  // ✅ form-url-encoded 로 보내면 preflight(OPTIONS) 없이 바로 POST됨
+  const body = new URLSearchParams();
+  Object.entries(params).forEach(([k, v]) => {
+    if (v === undefined || v === null) return;
+    body.set(k, typeof v === "string" ? v : JSON.stringify(v));
+  });
+
+  const res = await fetch(GAS_URL, {
+    method: "POST",
+    cache: "no-store",
+    body,
+  });
+
+  const text = await res.text();
+  if (!res.ok) throw new Error(text || `HTTP ${res.status}`);
+  try { return JSON.parse(text); } catch { return text; }
+}
+
 export function genRoomCode() {
   return String(Math.floor(1000 + Math.random() * 9000));
 }
 
 export async function ping() {
-  return jget(`${GAS_URL}?op=ping`);
+  return await jget({ op: "ping" });
 }
 
-export async function getState(room) {
-  return jget(`${GAS_URL}?op=state&room=${room}`);
+export async function getState(roomCode) {
+  return await jget({ op: "state", room: String(roomCode) });
 }
 
-export async function setState(room, state) {
-  return jget(`${GAS_URL}?op=state&room=${room}`)
-    .then(() => fetch(GAS_URL, {
-      method:'POST',
-      body: JSON.stringify({
-        op:'setState',
-        roomCode: room,
-        state
-      })
-    }));
+export async function setState(roomCode, state) {
+  return await jpost({ op: "setState", roomCode: String(roomCode), state });
 }
 
-export async function patchState(room, patch) {
-  return fetch(GAS_URL, {
-    method:'POST',
-    body: JSON.stringify({
-      op:'patchState',
-      roomCode: room,
-      patch
-    })
-  });
+export async function patchState(roomCode, patch) {
+  return await jpost({ op: "patchState", roomCode: String(roomCode), patch });
+}
+
+export async function pushAction(roomCode, action) {
+  return await jpost({ op: "pushAction", roomCode: String(roomCode), action });
+}
+
+export async function pullActions(roomCode) {
+  return await jget({ op: "actions", room: String(roomCode) });
+}
+
+export async function clearActions(roomCode, uptoId = null) {
+  return await jpost({ op: "clearActions", roomCode: String(roomCode), uptoId });
 }
