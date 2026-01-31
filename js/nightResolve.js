@@ -7,8 +7,16 @@ export function resolveNight(state, draft){
 
   const mafiaAttack = draft.mafiaId!=null && alive(draft.mafiaId) && draft.mafiaTarget!=null && alive(draft.mafiaTarget);
   const doctorSave = mafiaAttack && draft.doctorId!=null && alive(draft.doctorId) && draft.doctorTarget!=null && draft.doctorTarget === draft.mafiaTarget;
+  const targetPlayer = mafiaAttack ? state.players[draft.mafiaTarget] : null;
+  const bulletproofTarget = targetPlayer && [ROLE.SOLDIER, ROLE.ARMY].includes(targetPlayer.role);
+  const bulletproofReady = bulletproofTarget && !targetPlayer.armorUsed;
+  const bulletproofSave = mafiaAttack && bulletproofReady && !doctorSave;
 
-  if(mafiaAttack && !doctorSave) dead.add(draft.mafiaTarget);
+  if(mafiaAttack && !doctorSave && !bulletproofSave) dead.add(draft.mafiaTarget);
+  if(bulletproofSave && targetPlayer){
+    targetPlayer.armorUsed = true;
+    events.push({type:'ARMY_SAVE'});
+  }
 
   if(draft.terroristId!=null && alive(draft.terroristId)){
     const terr = state.players[draft.terroristId];
@@ -31,9 +39,10 @@ export function resolveNight(state, draft){
   }
 
   let reporterRevealTarget = null;
-  if(draft.reporterUsed && state.night>=2 && draft.reporterId!=null && alive(draft.reporterId) && !dead.has(draft.reporterId) && draft.reporterTarget!=null){
+  if(draft.reporterUsed && !state.reporterUsedOnce && state.night>=2 && draft.reporterId!=null && alive(draft.reporterId) && !dead.has(draft.reporterId) && draft.reporterTarget!=null){
     events.push({type:'REPORTER_NEWS', targetId:draft.reporterTarget});
     reporterRevealTarget = draft.reporterTarget;
+    state.reporterUsedOnce = true;
   }
 
   return {dead:[...dead], events, reporterRevealTarget};

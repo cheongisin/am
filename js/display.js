@@ -1,6 +1,6 @@
 import {el} from './util.js';
 import {getState, patchState, pushAction} from './gasApi.js';
-import {PHASE, CARD, EVENT_IMG, ROLE_LABEL} from '../src/constants.js';
+import {PHASE, CARD, DEAD_CARD, EVENT_IMG, ROLE_LABEL} from '../src/constants.js';
 
 let wakeLock=null;
 async function keepAwake(){ try{ wakeLock = await navigator.wakeLock.request('screen'); }catch{} }
@@ -13,7 +13,22 @@ let state=null;
 let deal={active:false, deckCount:0, used:[]};
 let pollTimer=null;
 let beatTimer=null;
-let lastFxToken=0;
+let timerTick=null;
+let lastEventToken=0;
+
+function formatTimer(seconds){
+  const s = Math.max(0, Number(seconds) || 0);
+  const m = Math.floor(s/60);
+  const r = s%60;
+  return `${String(m).padStart(2,'0')}:${String(r).padStart(2,'0')}`;
+}
+function getTimerRemaining(timer){
+  if(!timer || timer.mode!=='COUNTDOWN') return null;
+  if(timer.running && timer.endAt){
+    return Math.max(0, Math.ceil((timer.endAt - Date.now())/1000));
+  }
+  return Math.max(0, Math.floor(timer.durationSec || 0));
+}
 
 render();
 
@@ -48,6 +63,10 @@ function render(){
     root.innerHTML = `
       <div class="dealwrap">
         <div class="card">
+          <div class="actions" style="justify-content:space-between">
+            <span class="badge night">${state.phase}</span>
+            <span class="badge" id="timerBadge"></span>
+          </div>
           <h3>카드 뽑기</h3>
           <p class="muted small">카드 선택 → 본인 이름 선택 (역할 5초 표시)</p>
           <div class="deck" id="deck"></div>
@@ -64,60 +83,24 @@ function render(){
     return;
   }
 
-  if(state.phase===PHASE.VOTE){
-    const alive = state.players.filter(p=>p.alive);
-    root.innerHTML = `
-      <div class="app">
-        <div class="card">
-          <h3>투표</h3>
-          <p class="muted small">투표자 → 대상 (기권 가능)</p>
-        </div>
-        <div class="grid cols2" style="margin-top:12px">
-          <div class="card">
-            <h3>투표자</h3>
-            <div class="voteGrid" id="voters"></div>
-          </div>
-          <div class="card">
-            <h3>대상</h3>
-            <div class="voteGrid" id="targets"></div>
-            <p class="muted small">투표자를 먼저 선택</p>
-          </div>
-        </div>
-      </div>
-    `;
-    const voters=root.querySelector('#voters');
-    const targets=root.querySelector('#targets');
-    let current=null;
-    alive.forEach(v=>{
-      const b=el(`<div class="pill">${v.name}</div>`);
-      b.onclick=()=>{
-        current=v.id;
-        targets.innerHTML='';
-        const abst=el(`<div class="pill">기권</div>`);
-        abst.onclick=()=>pushAction(roomCode, {type:'VOTE', voterId: current, targetId: null}).catch(()=>{});
-        targets.appendChild(abst);
-        alive.filter(t=>t.id!==v.id).forEach(t=>{
-          const tb=el(`<div class="pill">${t.name}</div>`);
-          tb.onclick=()=>pushAction(roomCode, {type:'VOTE', voterId: current, targetId: t.id}).catch(()=>{});
-          targets.appendChild(tb);
-        });
-      };
-      voters.appendChild(b);
-    });
-    return;
-  }
-
   // Table view
   root.innerHTML = `
     <div class="board">
       <div class="hud">
-        <span class="badge night">${state.phase} ${state.phase===PHASE.NIGHT?`N${state.night}`:''}</span>
         <span class="badge">생존 ${state.players.filter(p=>p.alive).length}/${state.players.length}</span>
         <span class="badge" id="connBadge">연결 ${connected?'🟢':'🔴'}</span>
         ${state.winner? `<span class="badge">승리: ${state.winner}</span>`:''}
       </div>
-      <div class="table" id="table"></div>
-      <p class="muted small">이벤트 연출은 자동</p>
+      <div class="table" id="table">
+        <div class="phase-center">
+          <div class="phase-title" id="phaseTitle"></div>
+          <div class="phase-time" id="timerBadge"></div>
+          <div class="phase-sub" id="phaseSub"></div>
+          <div class="timer-bar" id="timerBar">
+            <div class="timer-bar-fill" id="timerBarFill"></div>
+          </div>
+        </div>
+      </div>
     </div>
   `;
   const table=root.querySelector('#table');
@@ -127,10 +110,12 @@ function render(){
     const r=40;
     const x=50+Math.cos(ang)*r;
     const y=50+Math.sin(ang)*r;
-    const img = CARD[p.publicCard] || CARD.CITIZEN;
+    const alive = p.alive;
+    const cardKey = state.winner ? (p.role || p.publicCard) : p.publicCard;
+    const img = !alive ? (DEAD_CARD[cardKey] || CARD[cardKey] || CARD.CITIZEN) : (CARD[cardKey] || CARD.CITIZEN);
     const seat=el(`
       <div class="seat ${p.alive?'':'dead'}" style="left:${x}%; top:${y}%">
-        <div class="imgwrap"><img src="${img}" alt="${p.publicCard}"></div>
+        <div class="imgwrap"><img src="${img}" alt="${cardKey}"></div>
         <div class="name">${p.name}</div>
       </div>
     `);
@@ -209,6 +194,12 @@ async function connectToRoom(code){
       render();
       return;
     }
+    if(!st.hostHeartbeat || (Date.now()-st.hostHeartbeat > 5000)){
+      connected=false;
+      alert('사회자 연결이 감지되지 않습니다. 잠시 후 다시 시도하세요.');
+      render();
+      return;
+    }
     connected=true;
     await patchState(roomCode, {clientHeartbeat: Date.now()});
     state = st;
@@ -223,11 +214,16 @@ async function connectToRoom(code){
 
 function startTimers(){
   if(pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(pollOnce, 800);
+  pollTimer = setInterval(pollOnce, 1000);
   if(beatTimer) clearInterval(beatTimer);
   beatTimer = setInterval(()=>{
     if(roomCode) patchState(roomCode, {clientHeartbeat: Date.now()}).catch(()=>{});
   }, 2000);
+  if(timerTick) clearInterval(timerTick);
+  timerTick = setInterval(()=>{
+    updateTimerBadge();
+    updatePhaseCenter();
+  }, 500);
 }
 
 async function pollOnce(){
@@ -240,8 +236,8 @@ async function pollOnce(){
       render();
       return;
     }
-    // 연결 판정: hostHeartbeat가 최근 6.5초 이내면 연결 성공
-    connected = !!(st.hostHeartbeat && (Date.now()-st.hostHeartbeat < 6500));
+    // 연결 판정: hostHeartbeat가 최근 5초 이내면 연결 성공
+    connected = !!(st.hostHeartbeat && (Date.now()-st.hostHeartbeat < 5000));
     state = st;
     await applyState(st);
   }catch{
@@ -256,6 +252,64 @@ function updateHudBadge(){
   if(badge) badge.textContent = `연결 ${connected?'🟢':'🔴'}`;
 }
 
+function updateTimerBadge(){
+  const badge = document.getElementById('timerBadge');
+  if(!badge) return;
+  const timer = state?.timer;
+  let text = '';
+  if(state?.winner){
+    text = '';
+  }else if(timer?.mode==='INFINITE'){
+    text = '∞';
+  }else if(timer?.mode==='COUNTDOWN'){
+    text = formatTimer(getTimerRemaining(timer));
+  }else{
+    text = '--:--';
+  }
+  badge.textContent = text ? `타이머 ${text}` : '';
+}
+
+function updatePhaseCenter(){
+  const titleEl = document.getElementById('phaseTitle');
+  const subEl = document.getElementById('phaseSub');
+  const bar = document.getElementById('timerBar');
+  const fill = document.getElementById('timerBarFill');
+  if(!titleEl || !subEl || !bar || !fill || !state) return;
+  const timer = state.timer;
+  const accused = state.executionTarget;
+  const accusedName = accused!=null ? (state.players.find(p=>p.id===accused)?.name || '') : '';
+  const winnerText = state.winner === 'MAFIA' ? '마피아 팀 승리' : (state.winner === 'CITIZEN' ? '시민 팀 승리' : '');
+
+  let title = '';
+  let sub = '';
+  if(state.winner){
+    title = winnerText;
+  }else if(state.phase===PHASE.NIGHT){
+    title = '밤이 되었습니다';
+  }else if(state.phase===PHASE.DAY){
+    title = '낮이 되었습니다';
+  }else if(state.phase===PHASE.VOTE){
+    title = '최후 변론';
+    if(accusedName) sub = `${accusedName} 변론 중`;
+  }else if(state.phase===PHASE.EXECUTION){
+    title = '투표 시간 입니다';
+    if(accusedName) sub = `${accusedName} 처리 여부`;
+  }else if(state.phase===PHASE.DEAL){
+    title = '카드 배정 중';
+  }
+  titleEl.textContent = title;
+  subEl.textContent = sub;
+
+  if(timer?.mode==='COUNTDOWN' && timer.durationSec){
+    bar.style.display = 'block';
+    const remaining = getTimerRemaining(timer);
+    const pct = Math.max(0, Math.min(100, (remaining / timer.durationSec) * 100));
+    fill.style.width = `${pct}%`;
+  }else{
+    bar.style.display = 'none';
+  }
+}
+
 async function applyState(st){
   // deck
   if(st.deckInfo){
@@ -268,11 +322,13 @@ async function applyState(st){
 
   render();
   updateHudBadge();
+  updateTimerBadge();
+  updatePhaseCenter();
 
-  // fx(이벤트/연출) 처리: token이 바뀔 때 1회 재생
-  if(st.fx && typeof st.fx.token === 'number' && st.fx.token !== lastFxToken){
-    lastFxToken = st.fx.token;
-    const events = Array.isArray(st.fx.events) ? st.fx.events : [];
+  // eventQueue(이벤트/연출) 처리: token이 바뀔 때 1회 재생
+  if(st.eventQueue && typeof st.eventQueue.token === 'number' && st.eventQueue.token !== lastEventToken){
+    lastEventToken = st.eventQueue.token;
+    const events = Array.isArray(st.eventQueue.events) ? st.eventQueue.events : [];
     for(const ev of events){
       if(ev.type==='DEAL_REVEAL'){
         // 카드 사용 표시
