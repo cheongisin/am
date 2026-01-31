@@ -193,7 +193,7 @@ function render(){
     <div class="grid cols2">
       <div class="card">
         <h3>방 연결 (GAS)</h3>
-        <p class="muted small">WebRTC 없이 동작합니다. 사회자가 4자리 코드를 만들고, 진행자는 그 코드로 접속합니다.</p>
+        <p class="muted small">사회자가 4자리 코드를 만들고, 진행자는 그 코드로 접속합니다.</p>
         <div class="grid cols2">
           <div>
             <label>방 코드</label>
