@@ -1,58 +1,41 @@
-// Google Apps Script (GAS) sync layer
-// WebRTC 제거 버전
+// ===== GAS API Client (CORS SAFE) =====
 
-// ✅ 너가 배포한 GAS Web App URL을 넣어줘
-// 예: https://script.google.com/macros/s/XXXX/exec
-export const GAS_URL = "https://script.google.com/macros/s/AKfycbw3uVQs9-nLGMm_eOQAJkVF-Q_GudKkWyYqgu-KlrLtHHFNtSOBRNjOvrjw1eyuj-IMwQ/exec";
+export const GAS_URL =
+  "https://script.google.com/macros/s/AKfycbyxcw93fSSBD640z9xRTmEMky77aS5gpciCHWBM_c9rZpwGl4QbVpKYO2c3BimmInrBpw/exec";
 
-function mustHaveUrl(){
-  if(!GAS_URL){
-    throw new Error('GAS_URL이 비어있습니다. js/gasApi.js의 GAS_URL을 설정하세요');
-  }
+function must(){
+  if (!GAS_URL) throw new Error("GAS_URL not set");
 }
 
 async function jfetch(url, opts={}){
   const res = await fetch(url, {
-    cache: 'no-store',
-    headers: { 'Content-Type': 'application/json', ...(opts.headers||{}) },
-    ...opts,
+    cache: "no-store",
+    ...opts // ⚠️ headers 없음 (preflight 방지)
   });
-  const text = await res.text();
-  if(!res.ok) throw new Error(text || `HTTP ${res.status}`);
-  if(!text) return null;
-  try{ return JSON.parse(text); }catch{ return text; }
+  const txt = await res.text();
+  if (!res.ok) throw new Error(txt);
+  return txt ? JSON.parse(txt) : null;
 }
 
 export function genRoomCode(){
   return String(Math.floor(1000 + Math.random()*9000));
 }
 
-export async function getState(roomCode){
-  mustHaveUrl();
-  return await jfetch(`${GAS_URL}?op=state&room=${encodeURIComponent(roomCode)}`);
+// ===== state write =====
+export async function saveState(state){
+  must();
+  const res = await jfetch(GAS_URL, {
+    method: "POST",
+    body: JSON.stringify(state)
+  });
+  if (!res || res.ok !== true) throw new Error("saveState failed");
+  return true;
 }
 
-export async function setState(roomCode, state){
-  mustHaveUrl();
-  return await jfetch(GAS_URL, { method:'POST', body: JSON.stringify({op:'setState', roomCode, state})});
-}
-
-export async function patchState(roomCode, patch){
-  mustHaveUrl();
-  return await jfetch(GAS_URL, { method:'POST', body: JSON.stringify({op:'patchState', roomCode, patch})});
-}
-
-export async function pushAction(roomCode, action){
-  mustHaveUrl();
-  return await jfetch(GAS_URL, { method:'POST', body: JSON.stringify({op:'pushAction', roomCode, action})});
-}
-
-export async function pullActions(roomCode){
-  mustHaveUrl();
-  return await jfetch(`${GAS_URL}?op=actions&room=${encodeURIComponent(roomCode)}`);
-}
-
-export async function clearActions(roomCode, uptoId=null){
-  mustHaveUrl();
-  return await jfetch(GAS_URL, { method:'POST', body: JSON.stringify({op:'clearActions', roomCode, uptoId})});
+// ===== state read =====
+export async function loadState(roomCode){
+  must();
+  const res = await jfetch(`${GAS_URL}?room=${encodeURIComponent(roomCode)}`);
+  if (!res || res.ok !== true) return null;
+  return res.state;
 }
