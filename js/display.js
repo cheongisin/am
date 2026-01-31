@@ -1,6 +1,7 @@
 import {el} from './util.js';
 import {getState, patchState, pushAction} from './gasApi.js';
 import {PHASE, CARD, DEAD_CARD, EVENT_IMG, ROLE_LABEL} from '../src/constants.js';
+window.__DEBUG_ROOM = (m)=>alert(m);
 
 let wakeLock=null;
 async function keepAwake(){ try{ wakeLock = await navigator.wakeLock.request('screen'); }catch{} }
