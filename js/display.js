@@ -243,7 +243,7 @@ async function pollOnce(){
       return;
     }
     // 연결 판정: hostHeartbeat가 최근 5초 이내면 연결 성공
-    connected = !!(st.hostHeartbeat && Date.now() - st.hostHeartbeat < 30000);
+    connected = !!(st.hostHeartbeat && Date.now() - st.hostHeartbeat < 60000);
     state = st;
     await applyState(st);
   }catch{
