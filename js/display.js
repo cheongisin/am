@@ -1,8 +1,11 @@
 import { genRoomCode, getState, patchState, pushAction } from './gasApi.js';
 import { PHASE, ROLE_LABEL } from '../src/constants.js';
 
-const root = document.getElementById('display');
+let root = null;
 
+/* =========================
+   상태 변수
+========================= */
 let connected = false;
 let roomCode = '';
 let pollTimer = null;
@@ -15,7 +18,7 @@ const BEAT_MS = 2000;
 const FAIL_TO_DISCONNECT = 6;
 
 /* =========================
-   공통 유틸
+   유틸
 ========================= */
 function escapeHtml(s) {
   return String(s ?? '')
@@ -32,10 +35,11 @@ function setConnected(v) {
    치명 에러 표시
 ========================= */
 function showFatal(err) {
+  const msg = err?.stack || err?.message || String(err);
   root.innerHTML = `
     <div style="padding:16px">
       <h2>display.js 오류</h2>
-      <pre style="white-space:pre-wrap">${escapeHtml(err?.stack || err)}</pre>
+      <pre style="white-space:pre-wrap">${escapeHtml(msg)}</pre>
       <button onclick="location.reload()">새로고침</button>
     </div>
   `;
@@ -89,7 +93,6 @@ function renderTable(state) {
     return '--:--';
   })();
 
-  /* 좌석 생성 (CSS가 배치 담당) */
   const seatHtml = players.map((p, i) => {
     const dead = p.alive === false;
     const label =
@@ -167,7 +170,7 @@ function wireDeal(state) {
           cardIndex: Number(btn.dataset.idx),
           playerId: guessNextPlayer(state)
         });
-      } catch (e) {
+      } catch {
         btn.disabled = false;
         alert('전송 실패');
       }
@@ -233,6 +236,13 @@ async function poll() {
 }
 
 /* =========================
-   시작
+   시작 (DOM 보장)
 ========================= */
-renderDisconnected();
+document.addEventListener('DOMContentLoaded', () => {
+  root = document.getElementById('display');
+  if (!root) {
+    alert('#display 엘리먼트를 찾을 수 없습니다.');
+    return;
+  }
+  renderDisconnected();
+});
