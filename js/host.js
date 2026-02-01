@@ -1,3 +1,4 @@
+// js/host.js
 import {modalConfirm} from './util.js';
 import {genRoomCode, getState, setState, patchState, pullActions, clearActions} from './gasApi.js';
 import {PHASE, ROLE, ROLE_LABEL} from '../src/constants.js';
@@ -19,6 +20,9 @@ let actionPollTimer=null;
 let lastActionId=null;
 let pendingReporterReveal=null;
 let actionPollFailures=0;
+
+// ✅ 추가: 폴링 중복 실행 방지 (스킵/끊김 핵심 원인)
+let polling=false;
 
 let game = createGame(Array.from({length:8}).map((_,i)=>({id:i,name:`P${i+1}`})));
 let nightDraft=null;
@@ -134,14 +138,21 @@ async function startRoom(code){
   render();
 }
 
+// ✅ 전체 교체: pollActions() (순서/중복/스킵 방지)
 async function pollActions(){
   if(!roomCode) return;
+
+  // ✅ 중복 폴링 방지
+  if(polling) return;
+  polling = true;
+
   try{
     const res = await pullActions(roomCode);
     actionPollFailures = 0;
     const actions = (res && res.actions) ? res.actions : [];
+
     if(!actions.length) {
-      // 연결 판정: 진행자 heartbeat가 최근 5초 이내면 connected
+      // 연결 판정: 진행자 heartbeat가 최근 60초 이내면 connected
       const st = await getState(roomCode);
       const ok = st?.clientHeartbeat && (Date.now()-st.clientHeartbeat < 60000);
       setConnected(!!ok);
@@ -149,16 +160,19 @@ async function pollActions(){
       return;
     }
 
-    // 순서대로 처리
+    // ✅ 액션 처리(상태 변경)만 먼저 진행
     for(const a of actions){
       if(lastActionId!=null && a.id<=lastActionId) continue;
       lastActionId = a.id;
-      await onAction(a);
+      await onAction(a); // onAction 내부에서 sync/render 하지 않도록 수정됨
     }
+
+    // ✅ 상태 저장 먼저
+    await sync();
+
+    // ✅ 그 다음에 액션 클리어 (중요)
     await clearActions(roomCode, lastActionId);
 
-    // 처리 후 상태 동기화
-    await sync();
     render();
   }catch(e){
     actionPollFailures += 1;
@@ -166,6 +180,8 @@ async function pollActions(){
       setConnected(false);
       renderBadgeOnly();
     }
+  }finally{
+    polling = false;
   }
 }
 
@@ -245,12 +261,14 @@ function render(){
     </div>
   </div>`;
 
-  app.querySelector('#undoBtn').onclick=()=>{
+  // ✅ await sync로 순서 보장 (렌더-저장 경쟁 감소)
+  app.querySelector('#undoBtn').onclick=async()=>{
     const ok=undo(game);
     if(ok){
       if(game.phase===PHASE.NIGHT) initNightDraft();
       pendingReporterReveal=null;
-      sync(); render();
+      await sync();
+      render();
     }
   };
 
@@ -287,10 +305,11 @@ function render(){
       return {id:i,name};
     });
     game = createGame(newPlayers);
-    sync(); render();
+    await sync();
+    render();
   };
 
-  app.querySelector('#phaseSel').onchange=()=>{
+  app.querySelector('#phaseSel').onchange=async()=>{
     snapshot(game);
     game.phase = app.querySelector('#phaseSel').value;
     if(game.phase===PHASE.DAY && game.timerConfig?.daySec){
@@ -299,7 +318,8 @@ function render(){
       resetTimerForPhase();
     }
     if(game.phase===PHASE.NIGHT) initNightDraft();
-    sync(); render();
+    await sync();
+    render();
   };
 
   app.querySelector('#dealStartBtn').onclick=async()=>{
@@ -313,8 +333,8 @@ function render(){
     game.reporterUsedOnce=false;
     game.deck = shuffle(rolePoolFor(game.players.length));
     game.deckUsed = Array.from({length:game.players.length}).map(()=>false);
-    // 진행자는 state.phase === DEAL로 판단하므로 별도 메시지 불필요
-    sync(); render();
+    await sync();
+    render();
   };
 
   app.querySelector('#forceEndBtn').onclick=async()=>{
@@ -328,7 +348,8 @@ function render(){
     game.executionTarget=null;
     game.reporterUsedOnce=false;
     pendingReporterReveal=null;
-    sync(); render();
+    await sync();
+    render();
   };
 
   // assign list
@@ -520,7 +541,6 @@ function wireControlPanel(){
       snapshot(game);
       const res = resolveNight(game, nightDraft);
       res.dead.forEach(id=>{ if(game.players[id]) game.players[id].alive=false; });
-      // 아침 연출 이벤트
       game.eventQueue = { token: Date.now(), events: res.events||[] };
       pendingReporterReveal = res.reporterRevealTarget;
       game.phase=PHASE.DAY;
@@ -532,7 +552,8 @@ function wireControlPanel(){
       game.votes={}; game.executionTarget=null;
       const winner=checkWin(game);
       if(winner){ game.phase=PHASE.END; game.winner=winner; setTimerStopped(); }
-      sync(); render();
+      await sync();
+      render();
     };
     return;
   }
@@ -545,7 +566,8 @@ function wireControlPanel(){
       game.phase=PHASE.VOTE;
       game.executionTarget=null;
       setTimerInfinite();
-      sync(); render();
+      await sync();
+      render();
     };
     app.querySelector('#skipDay').onclick=async()=>{
       const ok = await modalConfirm('토론 스킵','토론을 스킵하고 투표로 넘어갈까요?');
@@ -554,7 +576,8 @@ function wireControlPanel(){
       game.phase=PHASE.VOTE;
       game.executionTarget=null;
       setTimerInfinite();
-      sync(); render();
+      await sync();
+      render();
     };
     app.querySelector('#manualReveal').onclick=async()=>{
       const ok = await modalConfirm('기자 공개','기자 공개(수동)를 진행할까요?');
@@ -563,8 +586,9 @@ function wireControlPanel(){
       const id = alive[0]?.id;
       if(id!=null){
         snapshot(game);
-        journalistReveal(game, id); // 간단: 첫 번째 생존자 공개 (테스트용). 필요하면 드롭다운으로 확장
-        sync(); render();
+        journalistReveal(game, id);
+        await sync();
+        render();
       }
     };
     return;
@@ -579,7 +603,8 @@ function wireControlPanel(){
       game.executionTarget = sel ? Number(sel.value) : null;
       game.phase=PHASE.EXECUTION;
       setTimerInfinite();
-      sync(); render();
+      await sync();
+      render();
     };
     return;
   }
@@ -611,14 +636,16 @@ function wireControlPanel(){
       const winner=checkWin(game);
       if(winner){ game.phase=PHASE.END; game.winner=winner; setTimerStopped(); }
       else { game.night+=1; game.phase=PHASE.NIGHT; setTimerInfinite(); game.votes={}; game.executionTarget=null; initNightDraft(); }
-      sync(); render();
+      await sync();
+      render();
     };
     app.querySelector('#execCancel').onclick=async()=>{
       const ok = await modalConfirm('처형 취소','처형 없이 다음 밤으로 넘어갈까요?');
       if(!ok) return;
       snapshot(game);
       game.night+=1; game.phase=PHASE.NIGHT; setTimerInfinite(); game.votes={}; game.executionTarget=null; initNightDraft();
-      sync(); render();
+      await sync();
+      render();
     };
     return;
   }
@@ -662,6 +689,7 @@ function onMsg(msg){
 
 async function onAction(action){
   const msg = action?.msg || action; // {type,...}
+
   if(msg.type==='REQ_SYNC'){
     if(pendingReporterReveal!=null){
       snapshot(game);
@@ -670,28 +698,34 @@ async function onAction(action){
     }
     return;
   }
+
+  // ✅ DEAL_PICK: 여기서는 sync/render 하지 않는다 (pollActions가 1회 처리)
   if(msg.type==='DEAL_PICK'){
     if(game.phase!==PHASE.DEAL || !game.deck || !game.deckUsed) return;
+
     const {cardIndex, playerId} = msg;
+
     if(game.deckUsed[cardIndex]) return;
+
     const p=game.players[playerId];
     if(!p || p.assigned) return;
+
     snapshot(game);
+
     const role = game.deck[cardIndex];
     game.deckUsed[cardIndex]=true;
-    p.role=role; p.assigned=true;
-    // 공개/연출: eventQueue로 전달 (display가 token 기준으로 1회만 재생)
+    p.role=role; 
+    p.assigned=true;
+
     game.eventQueue = { token: Date.now(), events: [{type:'DEAL_REVEAL', playerId, role, cardIndex}] };
-    await sync();
-    render();
+
     if(game.players.every(x=>x.assigned)){
       snapshot(game);
       game.phase=PHASE.NIGHT;
       setTimerInfinite();
       initNightDraft();
-      await sync();
-      render();
     }
+    return;
   }
 
   if(msg.type==='VOTE'){
