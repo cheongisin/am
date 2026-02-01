@@ -1,4 +1,3 @@
-
 import {modalConfirm} from './util.js';
 import {genRoomCode, getState, setState, patchState, pullActions, clearActions} from './gasApi.js';
 import {PHASE, ROLE, ROLE_LABEL} from '../src/constants.js';
