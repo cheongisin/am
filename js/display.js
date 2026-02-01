@@ -115,10 +115,12 @@ function render(){
     name: '사회자',
     img: 'assets/pront.svg'
   };
-  const seatRadius = {x: 40, y: 34};
+  const seatCenter = {x: 50, y: 47};
+  const seatRadius = {x: 42, y: 30};
+  const hostRadius = {x: 0, y: 36};
   const hostAngle = Math.PI / 2; // 6시 방향
-  const hostX = 50 + Math.cos(hostAngle) * seatRadius.x;
-  const hostY = 50 + Math.sin(hostAngle) * seatRadius.y;
+  const hostX = seatCenter.x + Math.cos(hostAngle) * hostRadius.x;
+  const hostY = seatCenter.y + Math.sin(hostAngle) * hostRadius.y;
   const hostEl = el(`
     <div class="seat" style="left:${hostX}%; top:${hostY}%">
       <div class="imgwrap"><img src="${hostSeat.img}" alt="사회자"></div>
@@ -128,12 +130,14 @@ function render(){
   table.appendChild(hostEl);
 
   const totalPlayers = state.players.length;
-  const step = (Math.PI * 2) / totalPlayers;
-  const offset = step / 2;
+  const startAngle = Math.PI * 1.1;
+  const endAngle = -Math.PI * 0.1;
+  const span = startAngle - endAngle;
+  const step = totalPlayers > 1 ? span / (totalPlayers - 1) : 0;
   state.players.forEach((player, index)=>{
-    const ang = -Math.PI / 2 + offset + (index * step);
-    const x = 50 + Math.cos(ang) * seatRadius.x;
-    const y = 50 + Math.sin(ang) * seatRadius.y;
+    const ang = totalPlayers > 1 ? (startAngle - (step * index)) : (-Math.PI / 2);
+    const x = seatCenter.x + Math.cos(ang) * seatRadius.x;
+    const y = seatCenter.y + Math.sin(ang) * seatRadius.y;
     const alive = player.alive;
     const cardKey = state.winner ? (player.role || player.publicCard) : player.publicCard;
     const img = !alive ? (DEAD_CARD[cardKey] || CARD[cardKey] || CARD.CITIZEN) : (CARD[cardKey] || CARD.CITIZEN);
