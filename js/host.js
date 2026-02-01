@@ -1,3 +1,4 @@
+
 import {modalConfirm} from './util.js';
 import {genRoomCode, getState, setState, patchState, pullActions, clearActions} from './gasApi.js';
 import {PHASE, ROLE, ROLE_LABEL} from '../src/constants.js';
@@ -18,7 +19,6 @@ let hostBeatTimer=null;
 let actionPollTimer=null;
 let lastActionId=null;
 let pendingReporterReveal=null;
-let actionPollFailures=0;
 
 let game = createGame(Array.from({length:8}).map((_,i)=>({id:i,name:`P${i+1}`})));
 let nightDraft=null;
@@ -138,7 +138,6 @@ async function pollActions(){
   if(!roomCode) return;
   try{
     const res = await pullActions(roomCode);
-    actionPollFailures = 0;
     const actions = (res && res.actions) ? res.actions : [];
     if(!actions.length) {
       // 연결 판정: 진행자 heartbeat가 최근 5초 이내면 connected
@@ -161,11 +160,9 @@ async function pollActions(){
     await sync();
     render();
   }catch(e){
-    actionPollFailures += 1;
-    if(actionPollFailures >= 3){
-      setConnected(false);
-      renderBadgeOnly();
-    }
+    // 폴링 에러면 연결 끊김으로 표시만
+    setConnected(false);
+    renderBadgeOnly();
   }
 }
 
