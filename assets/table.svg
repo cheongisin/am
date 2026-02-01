@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 700" width="1200" height="700" aria-label="gambling table">
+  <defs>
+    <radialGradient id="felt" cx="50%" cy="35%" r="65%">
+      <stop offset="0%" stop-color="#2b7a6b"/>
+      <stop offset="70%" stop-color="#0b3a33"/>
+      <stop offset="100%" stop-color="#072d28"/>
+    </radialGradient>
+    <linearGradient id="rail" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0%" stop-color="#3b1f12"/>
+      <stop offset="100%" stop-color="#1f120c"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="700" fill="none"/>
+  <path d="M120 620
+           Q600 680 1080 620
+           Q1150 500 1120 280
+           Q1080 60 600 60
+           Q120 60 80 280
+           Q50 500 120 620Z" fill="url(#rail)" opacity="0.9"/>
+  <path d="M180 580
+           Q600 640 1020 580
+           Q1070 500 1050 300
+           Q1020 120 600 120
+           Q180 120 150 300
+           Q130 500 180 580Z" fill="url(#felt)"/>
+  <path d="M260 545
+           Q600 600 940 545
+           Q980 485 965 320
+           Q940 180 600 180
+           Q260 180 235 320
+           Q220 485 260 545Z" fill="none" stroke="#d9f7ef" stroke-width="6" opacity="0.5"/>
+</svg>
