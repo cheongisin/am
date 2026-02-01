@@ -2,7 +2,7 @@
 // ✅ GET/JSONP only (CORS/프리플라이트 회피 버전)
 
 // ✅ 너가 배포한 GAS Web App URL (…/exec)
-export const GAS_URL = "https://script.google.com/macros/s/AKfycbzKmSSsFIPhGU-bwsUo2VKJS_aKoQZA7nS0ir08YvLw016YJDDmy3r9XJPktlqTIcDw6A/exec";
+export const GAS_URL = "https://script.google.com/macros/s/AKfycbz0kL9IatYDMU1y9_QFeyuIGh6RZnPpsfkv3_Zak7GEVXxPDfhJyl36x3-tTwzjlwDNIA/exec";
 
 function mustHaveUrl(){
   if(!GAS_URL){
@@ -73,7 +73,8 @@ export function genRoomCode(){
 
 // ---- READ ----
 export async function getState(roomCode){
-  return await jsonp(urlFor('state', roomCode));
+  const res = await jsonp(urlFor('state', roomCode));
+  return (res && res.state) ? res.state : {};
 }
 
 export async function pullActions(roomCode){
@@ -101,8 +102,5 @@ export async function clearActions(roomCode, uptoId=null){
 // ---- Health check ----
 export async function ping(){
   mustHaveUrl();
-  // ping은 room 없이도 됨
-  const u = new URL(GAS_URL);
-  u.searchParams.set('ping','1');
-  return await jsonp(u.toString());
+  return await jsonp(urlFor('ping'));
 }
