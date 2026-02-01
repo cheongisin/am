@@ -1,3 +1,4 @@
+
 // Google Apps Script (GAS) sync layer
 // ✅ GET/JSONP only (CORS/프리플라이트 회피 버전)
 
