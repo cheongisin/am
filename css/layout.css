@@ -1,14 +1,15 @@
 .board{display:flex;flex-direction:column;gap:12px;align-items:center;padding:10px}
 .hud{width:min(96vw, 1100px);display:flex;gap:10px;justify-content:space-between;flex-wrap:wrap}
 .table{
-  width:min(96vw, 1100px); height:min(62vw, 620px);
-  border-radius:40%;
+  flex:1;
+  height:min(62vw, 620px);
+  border-radius:20px;
   background:
-    url('../assets/table.svg') center/contain no-repeat,
     radial-gradient(circle at 50% 38%, #1b2545 0%, #020617 70%);
   border:1px solid rgba(255,255,255,.06);
   box-shadow: var(--shadow);
   position:relative;
+  overflow:hidden;
 }
 .seat{position:absolute; width:96px; transform:translate(-50%,-50%); text-align:center}
 @media (max-width: 840px){ .seat{width:80px} }
