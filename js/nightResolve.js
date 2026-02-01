@@ -1,4 +1,3 @@
-
 import {modalConfirm} from './util.js';
 import {genRoomCode, getState, setState, patchState, pullActions, clearActions} from './gasApi.js';
 import {PHASE, ROLE, ROLE_LABEL} from '../src/constants.js';
@@ -6,10 +5,7 @@ import {createGame, publicState, snapshot, undo} from '../src/gameState.js';
 import {journalistReveal} from '../src/journalist.js';
 import {execute} from '../src/execution.js';
 import {checkWin} from '../src/win.js';
-import * as NightResolve from './nightResolve.js';
-const resolveNight = NightResolve.resolveNight ?? NightResolve.default;
-if (!resolveNight) throw new Error('nightResolve.js에서 resolveNight export를 찾을 수 없습니다.');
-
+import {resolveNight} from './nightResolve.js';
 
 let wakeLock=null;
 async function keepAwake(){ try{ wakeLock = await navigator.wakeLock.request('screen'); }catch{} }
