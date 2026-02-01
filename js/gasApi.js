@@ -73,7 +73,8 @@ export function genRoomCode(){
 
 // ---- READ ----
 export async function getState(roomCode){
-  return await jsonp(urlFor('state', roomCode));
+  const res = await jsonp(urlFor('state', roomCode));
+  return (res && res.state) ? res.state : {};
 }
 
 export async function pullActions(roomCode){
@@ -101,8 +102,5 @@ export async function clearActions(roomCode, uptoId=null){
 // ---- Health check ----
 export async function ping(){
   mustHaveUrl();
-  // ping은 room 없이도 됨
-  const u = new URL(GAS_URL);
-  u.searchParams.set('ping','1');
-  return await jsonp(u.toString());
+  return await jsonp(urlFor('ping'));
 }
