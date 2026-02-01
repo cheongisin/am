@@ -1,103 +1,108 @@
-// js/gasApi.js - JSONP only (CORS 회피), GAS Web App Sync Layer
+// Google Apps Script (GAS) sync layer
+// ✅ GET/JSONP only (CORS/프리플라이트 회피 버전)
 
-export const GAS_URL = "https://script.google.com/macros/s/AKfycbwC23PdK8meMGDsm-UBYkOpjk61JFOeRTLAPihKX-g0oG7j0sio3C7bylAObvW_DAtQ2g/exec"; // https://script.google.com/macros/s/XXXX/exec
+// ✅ 너가 배포한 GAS Web App URL (…/exec)
+export const GAS_URL = "https://script.google.com/macros/s/AKfycbwC23PdK8meMGDsm-UBYkOpjk61JFOeRTLAPihKX-g0oG7j0sio3C7bylAObvW_DAtQ2g/exec";
 
 function mustHaveUrl(){
-  if(!GAS_URL) throw new Error("GAS_URL이 비어있습니다. js/gasApi.js에 exec URL을 넣으세요.");
+  if(!GAS_URL){
+    throw new Error('GAS_URL이 비어있습니다. js/gasApi.js의 GAS_URL을 설정하세요');
+  }
 }
 
-function b64urlEncode(str){
-  const bytes = new TextEncoder().encode(str);
-  let bin = "";
-  for (let i=0;i<bytes.length;i++) bin += String.fromCharCode(bytes[i]);
-  const b64 = btoa(bin).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+// ---- base64 websafe encode(JSON) ----
+function b64wsEncode(obj){
+  const json = JSON.stringify(obj ?? {});
+  const utf8 = new TextEncoder().encode(json);
+  let bin = '';
+  for (let i=0;i<utf8.length;i++) bin += String.fromCharCode(utf8[i]);
+  const b64 = btoa(bin)
+    .replace(/\+/g,'-')
+    .replace(/\//g,'_')
+    .replace(/=+$/,'');
   return b64;
 }
 
-function jsonp(params){
-  mustHaveUrl();
-  return new Promise((resolve, reject) => {
-    const cbName = "__gas_cb_" + Math.random().toString(16).slice(2);
-    const url = new URL(GAS_URL);
-    Object.entries(params).forEach(([k,v]) => url.searchParams.set(k, String(v)));
+// ---- JSONP helper ----
+function jsonp(url){
+  return new Promise((resolve, reject)=>{
+    const cb = 'cb_' + Math.random().toString(36).slice(2);
+    const s = document.createElement('script');
+    const timeout = setTimeout(()=>{
+      cleanup();
+      reject(new Error('JSONP timeout'));
+    }, 12000);
 
-    url.searchParams.set("callback", cbName);
+    function cleanup(){
+      clearTimeout(timeout);
+      try{ delete window[cb]; }catch(e){ window[cb]=undefined; }
+      if(s && s.parentNode) s.parentNode.removeChild(s);
+    }
 
-    const script = document.createElement("script");
-    script.async = true;
-    script.src = url.toString();
-
-    const cleanup = () => {
-      delete window[cbName];
-      script.remove();
-    };
-
-    window[cbName] = (data) => {
+    window[cb] = (data)=>{
       cleanup();
       resolve(data);
     };
 
-    script.onerror = () => {
+    const sep = url.includes('?') ? '&' : '?';
+    s.src = url + sep + 'callback=' + encodeURIComponent(cb) + '&_ts=' + Date.now();
+    s.onerror = ()=>{
       cleanup();
-      reject(new Error("JSONP load failed (네트워크/배포URL/권한 확인)"));
+      reject(new Error('JSONP load failed'));
     };
-
-    document.head.appendChild(script);
+    document.head.appendChild(s);
   });
 }
 
-function unwrap(resp){
-  // 서버가 {ok:true,state:{...}} 형태로 주므로 여기서 통일
-  if (resp && resp.ok === false) return resp; // caller가 판단
-  return resp;
+function urlFor(op, roomCode, payloadObj){
+  mustHaveUrl();
+  const u = new URL(GAS_URL);
+  u.searchParams.set('op', op);
+  if (roomCode !== undefined && roomCode !== null){
+    u.searchParams.set('room', String(roomCode));
+  }
+  if (payloadObj !== undefined){
+    u.searchParams.set('payload', b64wsEncode(payloadObj));
+  }
+  return u.toString();
 }
 
 export function genRoomCode(){
   return String(Math.floor(1000 + Math.random()*9000));
 }
 
-export async function ping(){
-  const r = unwrap(await jsonp({ op:"ping" }));
-  if (r.ok === false) throw new Error(r.error || "ping_failed");
-  return r;
-}
-
+// ---- READ ----
 export async function getState(roomCode){
-  const r = unwrap(await jsonp({ op:"state", room: roomCode }));
-  if (r.ok === false) return r;          // {ok:false,error:"not_found"...}
-  return r.state ?? r;                   // 혹시 예전 포맷도 허용
-}
-
-export async function setState(roomCode, state){
-  const data = b64urlEncode(JSON.stringify({ roomCode, state }));
-  const r = unwrap(await jsonp({ op:"setState", data }));
-  if (r.ok === false) throw new Error(r.error || "setState_failed");
-  return r;
-}
-
-export async function patchState(roomCode, patch){
-  const data = b64urlEncode(JSON.stringify({ roomCode, patch }));
-  const r = unwrap(await jsonp({ op:"patchState", data }));
-  if (r.ok === false) throw new Error(r.error || "patchState_failed");
-  return r;
-}
-
-export async function pushAction(roomCode, action){
-  const data = b64urlEncode(JSON.stringify({ roomCode, action }));
-  const r = unwrap(await jsonp({ op:"pushAction", data }));
-  if (r.ok === false) throw new Error(r.error || "pushAction_failed");
-  return r;
+  return await jsonp(urlFor('state', roomCode));
 }
 
 export async function pullActions(roomCode){
-  const r = unwrap(await jsonp({ op:"actions", room: roomCode }));
-  if (r.ok === false) return r;
-  return r.actions ?? [];
+  return await jsonp(urlFor('actions', roomCode));
+}
+
+// ---- WRITE (GET/JSONP) ----
+export async function setState(roomCode, state){
+  return await jsonp(urlFor('setState', roomCode, { state }));
+}
+
+export async function patchState(roomCode, patch){
+  return await jsonp(urlFor('patchState', roomCode, { patch }));
+}
+
+export async function pushAction(roomCode, action){
+  return await jsonp(urlFor('pushAction', roomCode, { action }));
 }
 
 export async function clearActions(roomCode, uptoId=null){
-  const data = b64urlEncode(JSON.stringify({ roomCode, uptoId }));
-  const r = unwrap(await jsonp({ op:"clearActions", data }));
-  if (r.ok === false) throw new Error(r.error || "clearActions_failed");
-  return r;
+  const payload = (uptoId === null) ? {} : { uptoId };
+  return await jsonp(urlFor('clearActions', roomCode, payload));
+}
+
+// ---- Health check ----
+export async function ping(){
+  mustHaveUrl();
+  // ping은 room 없이도 됨
+  const u = new URL(GAS_URL);
+  u.searchParams.set('ping','1');
+  return await jsonp(u.toString());
 }
