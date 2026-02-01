@@ -8,89 +8,110 @@
 // Mafia42 State Sync API (GAS)
 // - state_<roomCode>: 방 상태(JSON)
 // - actions_<roomCode>: 진행자 -> 사회자 액션 큐
-
-function jsonOut_(obj){
-  return ContentService
-    .createTextOutput(JSON.stringify(obj||{}))
-    .setMimeType(ContentService.MimeType.JSON);
-}
+// - JSONP(GET) 전용 (CORS 회피)
 
 function key_(type, room){
   return type + '_' + room;
 }
 
-function doGet(e){
-  var op = (e.parameter.op||'').toLowerCase();
-  var room = (e.parameter.room||'').trim();
-  if(!room) return jsonOut_({error:'room required'});
-
-  var props = PropertiesService.getScriptProperties();
-  if(op === 'state'){
-    var raw = props.getProperty(key_('state', room));
+function jsonpOut_(obj, callback){
+  var payload = JSON.stringify(obj || {});
+  if(callback){
     return ContentService
-      .createTextOutput(raw || '')
-      .setMimeType(ContentService.MimeType.JSON);
+      .createTextOutput(callback + '(' + payload + ')')
+      .setMimeType(ContentService.MimeType.JAVASCRIPT);
   }
-  if(op === 'actions'){
-    var a = props.getProperty(key_('actions', room));
-    var arr = a ? JSON.parse(a) : [];
-    return jsonOut_({actions: arr});
-  }
-  return jsonOut_({error:'unknown op'});
+  return ContentService
+    .createTextOutput(payload)
+    .setMimeType(ContentService.MimeType.JSON);
 }
 
-function doPost(e){
-  var body = {};
-  try{ body = JSON.parse(e.postData.contents); }catch(err){ return jsonOut_({error:'bad json'}); }
-  var op = (body.op||'').toLowerCase();
-  var room = (body.roomCode||'').trim();
-  if(!room) return jsonOut_({error:'roomCode required'});
+function decodePayload_(raw){
+  if(!raw) return {};
+  try{
+    var bytes = Utilities.base64DecodeWebSafe(raw);
+    var json = Utilities.newBlob(bytes).getDataAsString('UTF-8');
+    return JSON.parse(json || '{}');
+  }catch(err){
+    return {};
+  }
+}
+
+function parseJson_(raw){
+  if(!raw) return {};
+  try{ return JSON.parse(raw); }catch(err){ return {}; }
+}
+
+function doGet(e){
+  var params = e && e.parameter ? e.parameter : {};
+  var op = (params.op||'').toLowerCase();
+  var room = (params.room||'').trim();
+  var callback = params.callback;
+  var payload = decodePayload_(params.payload);
+
+  if(op === 'ping'){
+    return jsonpOut_({ok:true, now: Date.now()}, callback);
+  }
+
+  if(!room){
+    return jsonpOut_({ok:false, error:'room required'}, callback);
+  }
 
   var props = PropertiesService.getScriptProperties();
+
+  if(op === 'state'){
+    var rawState = props.getProperty(key_('state', room));
+    return jsonpOut_({ok:true, state: parseJson_(rawState)}, callback);
+  }
+
+  if(op === 'actions'){
+    var rawActions = props.getProperty(key_('actions', room));
+    return jsonpOut_({ok:true, actions: parseJson_(rawActions) || []}, callback);
+  }
+
   var lock = LockService.getScriptLock();
   lock.tryLock(3000);
   try{
     if(op === 'setstate'){
-      props.setProperty(key_('state', room), JSON.stringify(body.state||{}));
-      return jsonOut_({ok:true});
+      props.setProperty(key_('state', room), JSON.stringify(payload.state || {}));
+      return jsonpOut_({ok:true}, callback);
     }
 
     if(op === 'patchstate'){
-      var raw = props.getProperty(key_('state', room));
-      var st = raw ? JSON.parse(raw) : {};
-      var patch = body.patch || {};
-      for(var k in patch){ st[k] = patch[k]; }
-      props.setProperty(key_('state', room), JSON.stringify(st));
-      return jsonOut_({ok:true});
+      var existing = parseJson_(props.getProperty(key_('state', room)));
+      var patch = payload.patch || {};
+      for(var k in patch){ existing[k] = patch[k]; }
+      props.setProperty(key_('state', room), JSON.stringify(existing));
+      return jsonpOut_({ok:true}, callback);
     }
 
     if(op === 'pushaction'){
-      var rawA = props.getProperty(key_('actions', room));
-      var arr = rawA ? JSON.parse(rawA) : [];
+      var arr = parseJson_(props.getProperty(key_('actions', room)));
+      if(!Array.isArray(arr)) arr = [];
       var id = (arr.length ? arr[arr.length-1].id : 0) + 1;
-      arr.push({id:id, msg: body.action||{}});
+      arr.push({id:id, msg: payload.action || {}});
       props.setProperty(key_('actions', room), JSON.stringify(arr));
-      return jsonOut_({ok:true, id:id});
+      return jsonpOut_({ok:true, id:id}, callback);
     }
 
     if(op === 'clearactions'){
-      var rawB = props.getProperty(key_('actions', room));
-      var arr2 = rawB ? JSON.parse(rawB) : [];
-      var upto = body.uptoId;
+      var existingActions = parseJson_(props.getProperty(key_('actions', room)));
+      if(!Array.isArray(existingActions)) existingActions = [];
+      var upto = payload.uptoId;
       if(typeof upto !== 'number'){
         props.deleteProperty(key_('actions', room));
-        return jsonOut_({ok:true});
+        return jsonpOut_({ok:true}, callback);
       }
       var remain = [];
-      for(var i=0;i<arr2.length;i++){
-        if(arr2[i].id > upto) remain.push(arr2[i]);
+      for(var i=0;i<existingActions.length;i++){
+        if(existingActions[i].id > upto) remain.push(existingActions[i]);
       }
       if(remain.length) props.setProperty(key_('actions', room), JSON.stringify(remain));
       else props.deleteProperty(key_('actions', room));
-      return jsonOut_({ok:true});
+      return jsonpOut_({ok:true}, callback);
     }
 
-    return jsonOut_({error:'unknown op'});
+    return jsonpOut_({ok:false, error:'unknown op'}, callback);
   } finally {
     try{ lock.releaseLock(); }catch(err){}
   }
