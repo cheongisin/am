@@ -235,7 +235,7 @@ async function pollOnce(){
   try{
     const st = await getState(roomCode);
     if(!st) return;
-    connected = !!(st.hostHeartbeat && (Date.now()-st.hostHeartbeat < 60000));
+    connected = !!(st.hostHeartbeat && (Date.now()-st.hostHeartbeat < 15000));
     state = st;
     applyState(st);
   }catch{
