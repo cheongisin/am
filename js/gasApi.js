@@ -1,9 +1,8 @@
-
 // Google Apps Script (GAS) sync layer
 // ✅ GET/JSONP only (CORS/프리플라이트 회피 버전)
 
 // ✅ 너가 배포한 GAS Web App URL (…/exec)
-export const GAS_URL = "https://script.google.com/macros/s/AKfycbzreafYa5z81EwHZJu5gF5EOGY0rnT_uZfIBBhKaUME__fxU4duHxnrO2zhp9KVrrKeZg/exec";
+export const GAS_URL = "https://script.google.com/macros/s/AKfycbz0kL9IatYDMU1y9_QFeyuIGh6RZnPpsfkv3_Zak7GEVXxPDfhJyl36x3-tTwzjlwDNIA/exec";
 
 function mustHaveUrl(){
   if(!GAS_URL){
@@ -75,7 +74,10 @@ export function genRoomCode(){
 // ---- READ ----
 export async function getState(roomCode){
   const res = await jsonp(urlFor('state', roomCode));
-  return (res && res.state) ? res.state : {};
+  if(res && res.state && typeof res.state === 'object') return res.state;
+  if(res && res.phase) return res;
+  if(res && res.state && res.state.state) return res.state.state;
+  return {};
 }
 
 export async function pullActions(roomCode){
