@@ -112,45 +112,35 @@ function render(){
   `;
   const table=root.querySelector('#table');
   const hostSeat = {
-    id: 'host',
     name: '사회자',
-    img: 'assets/pront.svg',
-    dead: false,
-    cardKey: 'host'
+    img: 'assets/pront.svg'
   };
-  const totalSeats = state.players.length + 1;
-  const hostSlotIndex = Math.floor(totalSeats / 2); // 6시 방향
-  const slots = Array.from({length: totalSeats}, () => null);
-  slots[hostSlotIndex] = hostSeat;
-  let playerIndex = 0;
-  for(let i=0;i<slots.length;i++){
-    if(slots[i]) continue;
-    slots[i] = state.players[playerIndex];
-    playerIndex += 1;
-  }
-  slots.forEach((slot, i)=>{
-    if(!slot) return;
-    const ang=(Math.PI*2)*(i/totalSeats)-Math.PI/2;
-    const r=40;
-    const x=50+Math.cos(ang)*r;
-    const y=50+Math.sin(ang)*r;
-    if(slot.id === 'host'){
-      const seat=el(`
-        <div class="seat" style="left:${x}%; top:${y}%">
-          <div class="imgwrap"><img src="${slot.img}" alt="사회자"></div>
-          <div class="name">${slot.name}</div>
-        </div>
-      `);
-      table.appendChild(seat);
-      return;
-    }
-    const alive = slot.alive;
-    const cardKey = state.winner ? (slot.role || slot.publicCard) : slot.publicCard;
+  const seatRadius = {x: 40, y: 34};
+  const hostAngle = Math.PI / 2; // 6시 방향
+  const hostX = 50 + Math.cos(hostAngle) * seatRadius.x;
+  const hostY = 50 + Math.sin(hostAngle) * seatRadius.y;
+  const hostEl = el(`
+    <div class="seat" style="left:${hostX}%; top:${hostY}%">
+      <div class="imgwrap"><img src="${hostSeat.img}" alt="사회자"></div>
+      <div class="name">${hostSeat.name}</div>
+    </div>
+  `);
+  table.appendChild(hostEl);
+
+  const totalPlayers = state.players.length;
+  const step = (Math.PI * 2) / totalPlayers;
+  const offset = step / 2;
+  state.players.forEach((player, index)=>{
+    const ang = -Math.PI / 2 + offset + (index * step);
+    const x = 50 + Math.cos(ang) * seatRadius.x;
+    const y = 50 + Math.sin(ang) * seatRadius.y;
+    const alive = player.alive;
+    const cardKey = state.winner ? (player.role || player.publicCard) : player.publicCard;
     const img = !alive ? (DEAD_CARD[cardKey] || CARD[cardKey] || CARD.CITIZEN) : (CARD[cardKey] || CARD.CITIZEN);
     const seat=el(`
-      <div class="seat ${slot.alive?'':'dead'}" style="left:${x}%; top:${y}%">
+      <div class="seat ${player.alive?'':'dead'}" style="left:${x}%; top:${y}%">
         <div class="imgwrap"><img src="${img}" alt="${cardKey}"></div>
-        <div class="name">${slot.name}</div>
+        <div class="name">${player.name}</div>
       </div>
     `);
     table.appendChild(seat);
@@ -188,12 +178,12 @@ async function showReveal(playerName, role){
       <div class="reveal-inner">
         <img src="${CARD[role] || CARD.BACK}" alt="${role}">
         <div class="who">${playerName} → <b>${ROLE_LABEL[role] || role}</b></div>
-        <div class="muted small">5초 후 자동 닫힘</div>
+        <div class="muted small">3초 후 자동 닫힘</div>
       </div>
     </div>
   `);
   document.body.appendChild(overlay);
-  await new Promise(r=>setTimeout(r, 5000));
+  await new Promise(r=>setTimeout(r, 3000));
   overlay.remove();
 }
 
