@@ -6,7 +6,10 @@ import {createGame, publicState, snapshot, undo} from '../src/gameState.js';
 import {journalistReveal} from '../src/journalist.js';
 import {execute} from '../src/execution.js';
 import {checkWin} from '../src/win.js';
-import {resolveNight} from './nightResolve.js';
+import * as NightResolve from './nightResolve.js';
+const resolveNight = NightResolve.resolveNight ?? NightResolve.default;
+if (!resolveNight) throw new Error('nightResolve.js에서 resolveNight export를 찾을 수 없습니다.');
+
 
 let wakeLock=null;
 async function keepAwake(){ try{ wakeLock = await navigator.wakeLock.request('screen'); }catch{} }
