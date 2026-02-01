@@ -1,4 +1,3 @@
-// js/host.js
 import {modalConfirm} from './util.js';
 import {genRoomCode, getState, setState, patchState, pullActions, clearActions} from './gasApi.js';
 import {PHASE, ROLE, ROLE_LABEL} from '../src/constants.js';
@@ -17,11 +16,10 @@ let connected=false;
 let roomCode='';
 let hostBeatTimer=null;
 let actionPollTimer=null;
-let lastActionId=null;
 let pendingReporterReveal=null;
 let actionPollFailures=0;
 
-// ✅ 추가: 폴링 중복 실행 방지 (스킵/끊김 핵심 원인)
+// ✅ 폴링 중복 실행 방지 (겹치면 끊기는 느낌 + 스킵/누락 발생)
 let polling=false;
 
 let game = createGame(Array.from({length:8}).map((_,i)=>({id:i,name:`P${i+1}`})));
@@ -100,6 +98,7 @@ function initNightDraft(){
     terroristId: find(ROLE.TERRORIST), terroristTarget: null
   };
 }
+
 async function sync(){
   if(!roomCode) return;
   const state = {
@@ -125,6 +124,10 @@ async function startRoom(code){
   roomCode = String(code||'').trim();
   if(!/^\d{4}$/.test(roomCode)) throw new Error('4자리 코드가 필요합니다.');
 
+  // ✅ 룸 시작 시 폴링 락/에러카운트 초기화
+  polling=false;
+  actionPollFailures=0;
+
   // 상태 갱신 (호스트 기준)
   await sync();
 
@@ -138,41 +141,44 @@ async function startRoom(code){
   render();
 }
 
-// ✅ 전체 교체: pollActions() (순서/중복/스킵 방지)
 async function pollActions(){
   if(!roomCode) return;
-
-  // ✅ 중복 폴링 방지
-  if(polling) return;
+  if(polling) return;         // ✅ 중복 poll 방지
   polling = true;
-
   try{
     const res = await pullActions(roomCode);
     actionPollFailures = 0;
+
     const actions = (res && res.actions) ? res.actions : [];
 
+    // ✅ 액션이 없으면 “연결 상태만” 가볍게 갱신
     if(!actions.length) {
-      // 연결 판정: 진행자 heartbeat가 최근 60초 이내면 connected
-      const st = await getState(roomCode);
-      const ok = st?.clientHeartbeat && (Date.now()-st.clientHeartbeat < 60000);
-      setConnected(!!ok);
-      renderBadgeOnly();
+      try{
+        const st = await getState(roomCode);
+        const ok = st?.clientHeartbeat && (Date.now()-st.clientHeartbeat < 60000);
+        setConnected(!!ok);
+        renderBadgeOnly();
+      }catch{
+        // state 읽기 실패하면 연결 끊김으로 처리하진 말고, failure 누적로 넘김
+      }
       return;
     }
 
-    // ✅ 액션 처리(상태 변경)만 먼저 진행
+    // ✅ (중요) lastActionId 기반 스킵 제거:
+    // 서버가 준 actions는 “미처리 큐”로 보고 전부 처리한다.
+    let maxId = null;
     for(const a of actions){
-      if(lastActionId!=null && a.id<=lastActionId) continue;
-      lastActionId = a.id;
-      await onAction(a); // onAction 내부에서 sync/render 하지 않도록 수정됨
+      if(a && typeof a.id === 'number'){
+        if(maxId==null || a.id > maxId) maxId = a.id;
+      }
+      await onAction(a);
     }
 
-    // ✅ 상태 저장 먼저
+    // 처리한 만큼만 clear (id가 없으면 그냥 전체 clear 요청)
+    await clearActions(roomCode, maxId);
+
+    // 처리 후 상태 동기화
     await sync();
-
-    // ✅ 그 다음에 액션 클리어 (중요)
-    await clearActions(roomCode, lastActionId);
-
     render();
   }catch(e){
     actionPollFailures += 1;
@@ -261,14 +267,12 @@ function render(){
     </div>
   </div>`;
 
-  // ✅ await sync로 순서 보장 (렌더-저장 경쟁 감소)
-  app.querySelector('#undoBtn').onclick=async()=>{
+  app.querySelector('#undoBtn').onclick=()=>{
     const ok=undo(game);
     if(ok){
       if(game.phase===PHASE.NIGHT) initNightDraft();
       pendingReporterReveal=null;
-      await sync();
-      render();
+      sync(); render();
     }
   };
 
@@ -305,11 +309,10 @@ function render(){
       return {id:i,name};
     });
     game = createGame(newPlayers);
-    await sync();
-    render();
+    sync(); render();
   };
 
-  app.querySelector('#phaseSel').onchange=async()=>{
+  app.querySelector('#phaseSel').onchange=()=>{
     snapshot(game);
     game.phase = app.querySelector('#phaseSel').value;
     if(game.phase===PHASE.DAY && game.timerConfig?.daySec){
@@ -318,8 +321,7 @@ function render(){
       resetTimerForPhase();
     }
     if(game.phase===PHASE.NIGHT) initNightDraft();
-    await sync();
-    render();
+    sync(); render();
   };
 
   app.querySelector('#dealStartBtn').onclick=async()=>{
@@ -663,6 +665,7 @@ function sel(title, actorId, key, optional){
     </select>
   `;
 }
+
 function reporterBlock(){
   const rid = nightDraft.reporterId;
   const actor = rid!=null ? game.players[rid] : null;
@@ -683,12 +686,8 @@ function reporterBlock(){
   `;
 }
 
-function onMsg(msg){
-  // (WebRTC 제거) legacy
-}
-
 async function onAction(action){
-  const msg = action?.msg || action; // {type,...}
+  const msg = action?.msg || action;
 
   if(msg.type==='REQ_SYNC'){
     if(pendingReporterReveal!=null){
@@ -699,24 +698,24 @@ async function onAction(action){
     return;
   }
 
-  // ✅ DEAL_PICK: 여기서는 sync/render 하지 않는다 (pollActions가 1회 처리)
   if(msg.type==='DEAL_PICK'){
     if(game.phase!==PHASE.DEAL || !game.deck || !game.deckUsed) return;
-
     const {cardIndex, playerId} = msg;
 
+    // 카드 이미 사용됨
     if(game.deckUsed[cardIndex]) return;
 
     const p=game.players[playerId];
+    // 플레이어가 없거나 이미 배정됨
     if(!p || p.assigned) return;
 
     snapshot(game);
 
     const role = game.deck[cardIndex];
     game.deckUsed[cardIndex]=true;
-    p.role=role; 
-    p.assigned=true;
+    p.role=role; p.assigned=true;
 
+    // 공개/연출
     game.eventQueue = { token: Date.now(), events: [{type:'DEAL_REVEAL', playerId, role, cardIndex}] };
 
     if(game.players.every(x=>x.assigned)){
