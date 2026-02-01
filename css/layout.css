@@ -3,7 +3,9 @@
 .table{
   width:min(96vw, 1100px); height:min(62vw, 620px);
   border-radius:40%;
-  background:radial-gradient(circle at 50% 38%, #1b2545 0%, #020617 70%);
+  background:
+    url('../assets/table.svg') center/contain no-repeat,
+    radial-gradient(circle at 50% 38%, #1b2545 0%, #020617 70%);
   border:1px solid rgba(255,255,255,.06);
   box-shadow: var(--shadow);
   position:relative;
