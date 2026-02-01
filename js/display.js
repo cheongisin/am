@@ -1,26 +1,57 @@
-import {el} from './util.js';
 import {getState, patchState, pushAction} from './gasApi.js';
-import {PHASE, CARD, DEAD_CARD, EVENT_IMG, ROLE_LABEL} from '../src/constants.js';
+import {PHASE, ROLE_LABEL} from '../src/constants.js';
 
-let wakeLock=null;
-async function keepAwake(){ try{ wakeLock = await navigator.wakeLock.request('screen'); }catch{} }
-document.addEventListener('click', keepAwake, {once:true});
+const app = document.getElementById('app');
 
-const root=document.getElementById('display');
 let connected=false;
 let roomCode='';
-let state=null;
-let deal={active:false, deckCount:0, used:[]};
 let pollTimer=null;
 let beatTimer=null;
 let timerTick=null;
-let lastEventToken=0;
-let eventPlayback = Promise.resolve();
 
-const previewState = typeof window !== 'undefined' ? window.__AM_PREVIEW_STATE__ : null;
-if(previewState){
-  state = previewState;
-  connected = true;
+let state=null;
+
+let deal = {
+  active:false,
+  deckCount:0,
+  used:[]
+};
+
+let lastEventToken=0;
+let lastRenderSig='';
+
+function makeRenderSig(st){
+  if(!st) return 'null';
+  const t = st.timer || {};
+  const timerSig = [t.mode||'', t.durationSec||0, t.endAt||0, t.running?1:0].join(':');
+  const tc = st.timerConfig || {};
+  const tcSig = [tc.daySec||0].join(':');
+  const players = Array.isArray(st.players) ? st.players.map(p=>[
+    p.id,
+    p.alive?1:0,
+    p.assigned?1:0,
+    p.publicCard||'',
+    p.terroristTarget==null?'':p.terroristTarget
+  ].join('.')).join('|') : '';
+  const deck = st.deckInfo ? [
+    st.deckInfo.count||0,
+    Array.isArray(st.deckInfo.used) ? st.deckInfo.used.map(v=>v?1:0).join('') : ''
+  ].join(':') : 'no';
+  const evTok = st.eventQueue && typeof st.eventQueue.token==='number' ? st.eventQueue.token : 0;
+  const accused = st.executionTarget==null?'':st.executionTarget;
+  const jr = Array.isArray(st.journalistReveals) ? st.journalistReveals.join(',') : '';
+  return [
+    st.phase||'',
+    st.night||0,
+    st.winner||'',
+    accused,
+    timerSig,
+    tcSig,
+    deck,
+    evTok,
+    jr,
+    players
+  ].join('||');
 }
 
 function formatTimer(seconds){
@@ -29,6 +60,7 @@ function formatTimer(seconds){
   const r = s%60;
   return `${String(m).padStart(2,'0')}:${String(r).padStart(2,'0')}`;
 }
+
 function getTimerRemaining(timer){
   if(!timer || timer.mode!=='COUNTDOWN') return null;
   if(timer.running && timer.endAt){
@@ -37,286 +69,170 @@ function getTimerRemaining(timer){
   return Math.max(0, Math.floor(timer.durationSec || 0));
 }
 
-render();
-
 function render(){
-  if(!state){
-    root.innerHTML = `
+  const st = state;
+
+  if(!st){
+    app.innerHTML = `
+      <div class="topbar"><div class="topbar-inner">
+        <div class="actions">
+          <span class="badge" id="connBadge">연결 🔴</span>
+        </div>
+      </div></div>
+
       <div class="app">
         <div class="card">
-          <h3>진행자 연결 (방코드)</h3>
-          <p class="muted small">사회자가 만든 4자리 코드를 입력하면 연결됩니다. (기본은 연결 실패 🔴)</p>
-          <label>방 코드</label>
-          <input id="code" placeholder="예: 4831" value="${roomCode}">
-          <div class="actions" style="margin-top:10px">
-            <button class="primary" id="join">접속</button>
-            <button id="retry">새로고침</button>
+          <h3>진행자(배정/표시) 연결</h3>
+          <div class="grid cols2">
+            <div>
+              <label>방 코드</label>
+              <input id="roomCode" placeholder="예: 4831" value="${roomCode}">
+            </div>
+            <div>
+              <label>&nbsp;</label>
+              <div class="actions">
+                <button class="primary" id="connectBtn">접속</button>
+              </div>
+            </div>
           </div>
-          <div class="muted small" id="msg">상태: ${connected?'연결 성공 🟢':'연결 실패 🔴'}</div>
+          <p class="muted small">사회자(host)가 만든 4자리 코드를 입력하고 접속합니다.</p>
         </div>
       </div>
     `;
-    root.querySelector('#join').onclick = async ()=>{
-      const code = root.querySelector('#code').value.trim();
-      await connectToRoom(code);
-    };
-    root.querySelector('#retry').onclick = async ()=>{
-      if(roomCode) await connectToRoom(roomCode);
-    };
-    return;
-  }
-
-  if(state.phase===PHASE.DEAL && deal.active){
-    root.innerHTML = `
-      <div class="dealwrap">
-        <div class="card">
-          <div class="actions" style="justify-content:space-between">
-            <span class="badge night">${state.phase}</span>
-            <span class="badge" id="timerBadge"></span>
-          </div>
-          <h3>카드 뽑기</h3>
-          <p class="muted small">카드 선택 → 본인 이름 선택 (역할 5초 표시)</p>
-          <div class="deck" id="deck"></div>
-        </div>
-      </div>
-    `;
-    const deckEl=root.querySelector('#deck');
-    for(let i=0;i<deal.deckCount;i++){
-      const used = deal.used[i];
-      const btn=el(`<div class="cardbtn ${used?'used':''}" data-i="${i}"><img src="${CARD.BACK}" alt="card"></div>`);
-      if(!used) btn.onclick=()=>openPickModal(i);
-      deckEl.appendChild(btn);
+    const btn = document.getElementById('connectBtn');
+    if(btn){
+      btn.onclick = connectRoom;
     }
+    updateHudBadge();
     return;
   }
 
-  // Table view
-  root.innerHTML = `
-    <div class="board">
-      <div class="hud">
-        <span class="badge">생존 ${state.players.filter(p=>p.alive).length}/${state.players.length}</span>
+  const aliveCount = st.players?.filter(p=>p.alive).length ?? 0;
+  const totalCount = st.players?.length ?? 0;
+
+  const timer = st.timer;
+  const remaining = getTimerRemaining(timer);
+  const timerText = timer?.mode==='INFINITE' ? '∞' : (timer?.mode==='COUNTDOWN' ? formatTimer(remaining) : '--:--');
+
+  app.innerHTML = `
+    <div class="topbar"><div class="topbar-inner">
+      <div class="actions">
+        <span class="badge night">${st.phase} ${st.phase===PHASE.NIGHT?`N${st.night}`:''}</span>
+        <span class="badge" id="timerBadge">타이머 ${timerText}</span>
+        <span class="badge">생존 ${aliveCount}/${totalCount}</span>
         <span class="badge" id="connBadge">연결 ${connected?'🟢':'🔴'}</span>
-        ${state.winner? `<span class="badge">승리: ${state.winner}</span>`:''}
+        <span class="badge">방코드 ${roomCode? `<b>${roomCode}</b>` : '-'}</span>
+        ${st.winner? `<span class="badge">승리: ${st.winner}</span>`:''}
       </div>
-      <div class="table" id="table">
-        <div class="phase-center">
-          <div class="phase-title" id="phaseTitle"></div>
-          <div class="phase-time" id="timerBadge"></div>
-          <div class="phase-sub" id="phaseSub"></div>
-          <div class="timer-bar" id="timerBar">
-            <div class="timer-bar-fill" id="timerBarFill"></div>
-          </div>
+    </div></div>
+
+    <div class="app">
+      <div class="card">
+        <div id="phaseCenter" class="phaseCenter"></div>
+        <div class="timerBar" id="timerBar" style="display:none">
+          <div class="timerFill" id="timerFill"></div>
+        </div>
+      </div>
+
+      <div class="grid cols2" style="margin-top:12px">
+        <div class="card">
+          <h3>플레이어</h3>
+          <div id="playerList"></div>
+        </div>
+        <div class="card">
+          <h3>배정</h3>
+          <div id="dealPanel"></div>
         </div>
       </div>
     </div>
   `;
-  const table=root.querySelector('#table');
-  const hostSeat = {
-    name: '사회자',
-    img: 'assets/pront.svg'
-  };
-  const seatCenter = {x: 50, y: 47};
-  const seatRadius = {x: 42, y: 30};
-  const hostRadius = {x: 0, y: 36};
-  const hostAngle = Math.PI / 2; // 6시 방향
-  const hostX = seatCenter.x + Math.cos(hostAngle) * hostRadius.x;
-  const hostY = seatCenter.y + Math.sin(hostAngle) * hostRadius.y;
-  const hostEl = el(`
-    <div class="seat" style="left:${hostX}%; top:${hostY}%">
-      <div class="imgwrap"><img src="${hostSeat.img}" alt="사회자"></div>
-      <div class="name">${hostSeat.name}</div>
-    </div>
-  `);
-  table.appendChild(hostEl);
 
-  const totalPlayers = state.players.length;
-  const startAngle = Math.PI * 1.1;
-  const endAngle = -Math.PI * 0.1;
-  const span = startAngle - endAngle;
-  const step = totalPlayers > 1 ? span / (totalPlayers - 1) : 0;
-  state.players.forEach((player, index)=>{
-    const ang = totalPlayers > 1 ? (startAngle - (step * index)) : (-Math.PI / 2);
-    const x = seatCenter.x + Math.cos(ang) * seatRadius.x;
-    const y = seatCenter.y + Math.sin(ang) * seatRadius.y;
-    const alive = player.alive;
-    const cardKey = state.winner ? (player.role || player.publicCard) : player.publicCard;
-    const img = !alive ? (DEAD_CARD[cardKey] || CARD[cardKey] || CARD.CITIZEN) : (CARD[cardKey] || CARD.CITIZEN);
-    const seat=el(`
-      <div class="seat ${player.alive?'':'dead'}" style="left:${x}%; top:${y}%">
-        <div class="imgwrap"><img src="${img}" alt="${cardKey}"></div>
-        <div class="name">${player.name}</div>
-      </div>
-    `);
-    table.appendChild(seat);
-  });
-}
-
-function openPickModal(cardIndex){
-  const options = state.players.filter(p=>!p.assigned).map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
-  const bd = el(`
-    <div class="modal-backdrop">
-      <div class="modal">
-        <h3>누구 차례?</h3>
-        <p>본인 이름 선택</p>
-        <label>플레이어</label>
-        <select id="pSel">${options}</select>
-        <div class="actions" style="margin-top:10px">
-          <button id="cancel">취소</button>
-          <button class="primary" id="ok">확인</button>
+  // player list
+  const listEl = document.getElementById('playerList');
+  if(listEl){
+    listEl.innerHTML = (st.players||[]).map(p=>{
+      const status = p.alive ? '' : '<span class="muted"> (사망)</span>';
+      const pub = (p.publicCard && p.publicCard!=='CITIZEN') ? ` / 공개:${ROLE_LABEL[p.publicCard]||p.publicCard}` : '';
+      return `
+        <div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.06)">
+          <div>${p.name}${status}</div>
+          <div class="muted small">${p.assigned?'배정됨':'미배정'}${pub}</div>
         </div>
-      </div>
-    </div>
-  `);
-  document.body.appendChild(bd);
-  bd.querySelector('#cancel').onclick=()=>bd.remove();
-  bd.querySelector('#ok').onclick=()=>{
-    const pid = Number(bd.querySelector('#pSel').value);
-    bd.remove();
-    pushAction(roomCode, {type:'DEAL_PICK', cardIndex, playerId: pid}).catch(()=>{});
-  };
-}
-
-async function showReveal(playerName, role){
-  const overlay = el(`
-    <div class="reveal">
-      <div class="reveal-inner">
-        <img src="${CARD[role] || CARD.BACK}" alt="${role}">
-        <div class="who">${playerName} → <b>${ROLE_LABEL[role] || role}</b></div>
-        <div class="muted small">3초 후 자동 닫힘</div>
-      </div>
-    </div>
-  `);
-  document.body.appendChild(overlay);
-  await new Promise(r=>setTimeout(r, 3000));
-  overlay.remove();
-}
-
-function playerNameFrom(stateRef, id){
-  if(id==null) return '플레이어';
-  const p = stateRef?.players?.find(x=>x.id===id);
-  return p?.name || '플레이어';
-}
-
-function eventCaption(ev, stateRef){
-  const type = ev?.type;
-  if(type === 'MAFIA_KILL'){
-    const name = playerNameFrom(stateRef, ev.victimId);
-    return `${name}이(가) 살해 당하였습니다.`;
+      `;
+    }).join('');
   }
-  if(type === 'EXECUTION'){
-    if(ev.terroristId != null){
-      const terrorist = playerNameFrom(stateRef, ev.terroristId);
-      const target = ev.executorName || playerNameFrom(stateRef, ev.executorId);
-      return `테러리스트 ${terrorist}님이 ${target}님을 습격 하였습니다.`;
+
+  // deal panel
+  const dealEl = document.getElementById('dealPanel');
+  if(dealEl){
+    if(st.phase!==PHASE.DEAL){
+      dealEl.innerHTML = `<p class="muted">배정 단계가 아닙니다.</p>`;
+    }else{
+      const options = (st.players||[]).filter(p=>!p.assigned).map(p=>`<option value="${p.id}">${p.name}</option>`).join('');
+      dealEl.innerHTML = `
+        <p class="muted small">카드를 선택하고, 배정할 플레이어를 선택한 뒤 “배정”을 누르세요.</p>
+        <div class="grid cols2">
+          <div>
+            <label>플레이어</label>
+            <select id="dealPlayerSel">${options}</select>
+          </div>
+          <div>
+            <label>카드</label>
+            <select id="dealCardSel"></select>
+          </div>
+        </div>
+        <div class="actions" style="margin-top:10px">
+          <button class="primary" id="dealPickBtn" ${connected?'':'disabled'}>직업을 뽑아 배정하기</button>
+        </div>
+        <p class="muted small">연결이 흔들려도 입력이 씹히지 않도록 렌더링을 최소화했습니다.</p>
+      `;
+
+      // cards
+      const cardSel = document.getElementById('dealCardSel');
+      if(cardSel){
+        cardSel.innerHTML = '';
+        for(let i=0;i<deal.deckCount;i++){
+          const used = deal.used[i];
+          const opt = document.createElement('option');
+          opt.value = String(i);
+          opt.textContent = used ? `카드 ${i+1} (사용됨)` : `카드 ${i+1}`;
+          opt.disabled = !!used;
+          cardSel.appendChild(opt);
+        }
+      }
+
+      const btn = document.getElementById('dealPickBtn');
+      if(btn){
+        // 모바일에서 click이 DOM 교체로 씹히는 문제를 피하려고 pointerup 사용
+        btn.onpointerup = async ()=>{
+          const ps = document.getElementById('dealPlayerSel');
+          const cs = document.getElementById('dealCardSel');
+          const playerId = ps ? Number(ps.value) : null;
+          const cardIndex = cs ? Number(cs.value) : null;
+          if(playerId==null || Number.isNaN(playerId)) return alert('플레이어를 선택하세요.');
+          if(cardIndex==null || Number.isNaN(cardIndex)) return alert('카드를 선택하세요.');
+          if(deal.used[cardIndex]) return alert('이미 사용된 카드입니다.');
+
+          try{
+            await pushAction(roomCode, {type:'DEAL_PICK', playerId, cardIndex});
+            // 낙관적 반영: 즉시 사용 처리(중복 클릭 방지)
+            deal.used[cardIndex]=true;
+            // render는 시그니처 변화 없으면 큰 폭으로 안 돌지만, 배정 UI는 즉시 갱신
+            render();
+            updateHudBadge();
+            updateTimerBadge();
+            updatePhaseCenter();
+          }catch(e){
+            alert('배정 전송 실패: ' + (e.message || String(e)));
+          }
+        };
+      }
     }
-    if(ev.executedId != null){
-      const name = playerNameFrom(stateRef, ev.executedId);
-      return `${name}이(가) 처형되었습니다.`;
-    }
-    return '';
-  }
-  if(type === 'TERROR_CHAIN'){
-    const terrorist = playerNameFrom(stateRef, ev.terroristId);
-    const target = playerNameFrom(stateRef, ev.targetId);
-    return `테러리스트 ${terrorist}님이 ${target}님을  습격 하였습니다.`;
-  }
-  if(type === 'DOCTOR_SAVE'){
-    const name = playerNameFrom(stateRef, ev.savedId);
-    return `${name}님이 의사의 치료를 받고 살아났습니다.`;
-  }
-  if(type === 'REPORTER_NEWS'){
-    const name = playerNameFrom(stateRef, ev.targetId);
-    const roleName = ROLE_LABEL[ev.role] || ev.role || '';
-    return `특종입니다! ${name}님이 ${roleName}(이)라는 소식 입니다!.`;
-  }
-  if(type === 'ARMY_SAVE'){
-    const name = playerNameFrom(stateRef, ev.savedId);
-    return `군인 ${name}님이 공격을 버텨냈습니다.`;
-  }
-  return '';
-}
-
-async function showEvent(ev){
-  const type = ev?.type || 'MAFIA_KILL';
-  const src = EVENT_IMG[type] || EVENT_IMG.MAFIA_KILL;
-  const caption = eventCaption(ev, state);
-  const overlay = el(`
-    <div class="event-overlay">
-      <img class="event-img" src="${src}" alt="${type}">
-      <div class="event-caption">${caption}</div>
-    </div>
-  `);
-  document.body.appendChild(overlay);
-  await new Promise(r=>setTimeout(r, 8000));
-  overlay.remove();
-}
-
-async function connectToRoom(code){
-  roomCode = String(code||'').trim();
-  if(!/^\d{4}$/.test(roomCode)){
-    connected=false;
-    alert('4자리 방 코드가 필요합니다.');
-    render();
-    return;
   }
 
-  try{
-    // 최초 상태 조회 (존재 확인)
-    const st = await getState(roomCode);
-    if(!st || !st.phase){
-      connected=false;
-      alert('해당 방을 찾을 수 없습니다. 방 코드가 맞는지 확인하세요.');
-      render();
-      return;
-    }
-
-  // hostHeartbeat는 '연결 뱃지'에만 사용하고, 최초 접속을 막지는 않는다.
-  // (모바일/백그라운드/절전으로 heartbeat가 늦게 찍히는 경우가 많음)
-  const hostOk = !!(st.hostHeartbeat && (Date.now()-st.hostHeartbeat < 60000));
-connected=true;
-    await patchState(roomCode, {clientHeartbeat: Date.now()});
-    state = st;
-    applyState(st);
-    startTimers();
-  }catch(e){
-    connected=false;
-    alert('접속 실패: ' + (e.message || String(e)));
-    render();
-  }
-}
-
-function startTimers(){
-  if(pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(pollOnce, 500);
-  if(beatTimer) clearInterval(beatTimer);
-  beatTimer = setInterval(()=>{
-    if(roomCode) patchState(roomCode, {clientHeartbeat: Date.now()}).catch(()=>{});
-  }, 2000);
-  if(timerTick) clearInterval(timerTick);
-  timerTick = setInterval(()=>{
-    updateTimerBadge();
-    updatePhaseCenter();
-  }, 500);
-}
-
-async function pollOnce(){
-  if(!roomCode) return;
-  try{
-    const st = await getState(roomCode);
-    if(!st || !st.phase){
-      connected=false;
-      updateHudBadge();
-      return;
-    }
-    // 연결 판정: hostHeartbeat가 최근 5초 이내면 연결 성공
-    connected = !!(st.hostHeartbeat && (Date.now()-st.hostHeartbeat < 60000));
-    state = st;
-    await applyState(st);
-  }catch{
-    connected=false;
-    // 화면은 유지하되 연결 뱃지만 꺼준다
-    updateHudBadge();
-  }
+  updateHudBadge();
+  updateTimerBadge();
+  updatePhaseCenter();
 }
 
 function updateHudBadge(){
@@ -334,43 +250,16 @@ function updateTimerBadge(){
   }else if(timer?.mode==='INFINITE'){
     text = '∞';
   }else if(timer?.mode==='COUNTDOWN'){
-    text = formatTimer(getTimerRemaining(timer));
+    const remaining = getTimerRemaining(timer);
+    text = formatTimer(remaining);
   }else{
     text = '--:--';
   }
-  badge.textContent = text ? `타이머 ${text}` : '';
-}
+  badge.textContent = `타이머 ${text}`;
 
-function updatePhaseCenter(){
-  const titleEl = document.getElementById('phaseTitle');
-  const subEl = document.getElementById('phaseSub');
   const bar = document.getElementById('timerBar');
-  const fill = document.getElementById('timerBarFill');
-  if(!titleEl || !subEl || !bar || !fill || !state) return;
-  const timer = state.timer;
-  const accused = state.executionTarget;
-  const accusedName = accused!=null ? (state.players.find(p=>p.id===accused)?.name || '') : '';
-  const winnerText = state.winner === 'MAFIA' ? '마피아 팀 승리' : (state.winner === 'CITIZEN' ? '시민 팀 승리' : '');
-
-  let title = '';
-  let sub = '';
-  if(state.winner){
-    title = winnerText;
-  }else if(state.phase===PHASE.NIGHT){
-    title = '밤이 되었습니다';
-  }else if(state.phase===PHASE.DAY){
-    title = '낮이 되었습니다';
-  }else if(state.phase===PHASE.VOTE){
-    title = '최후 변론';
-    if(accusedName) sub = `${accusedName} 변론 중`;
-  }else if(state.phase===PHASE.EXECUTION){
-    title = '투표 시간 입니다';
-    if(accusedName) sub = `${accusedName} 처리 여부`;
-  }else if(state.phase===PHASE.DEAL){
-    title = '카드 배정 중';
-  }
-  titleEl.textContent = title;
-  subEl.textContent = sub;
+  const fill = document.getElementById('timerFill');
+  if(!bar || !fill) return;
 
   if(timer?.mode==='COUNTDOWN' && timer.durationSec){
     bar.style.display = 'block';
@@ -382,37 +271,163 @@ function updatePhaseCenter(){
   }
 }
 
+function updatePhaseCenter(){
+  const el = document.getElementById('phaseCenter');
+  if(!el) return;
+  const st = state;
+  if(!st){
+    el.textContent = '';
+    return;
+  }
+  if(st.winner){
+    el.innerHTML = `<div class="big">${st.winner} 승리</div>`;
+    return;
+  }
+  if(st.phase===PHASE.SETUP){
+    el.innerHTML = `<div class="big">게임 진행 준비 중</div><div class="muted">사회자 화면에서 배정을 시작하세요</div>`;
+    return;
+  }
+  if(st.phase===PHASE.DEAL){
+    const assigned = (st.players||[]).filter(p=>p.assigned).length;
+    el.innerHTML = `<div class="big">배정 중</div><div class="muted">${assigned}/${(st.players||[]).length}</div>`;
+    return;
+  }
+  if(st.phase===PHASE.NIGHT){
+    el.innerHTML = `<div class="big">밤</div><div class="muted">사회자가 밤 행동을 종합 중</div>`;
+    return;
+  }
+  if(st.phase===PHASE.DAY){
+    el.innerHTML = `<div class="big">낮</div><div class="muted">토론</div>`;
+    return;
+  }
+  if(st.phase===PHASE.VOTE){
+    el.innerHTML = `<div class="big">투표</div><div class="muted">최후 변론 대상 선택/투표</div>`;
+    return;
+  }
+  if(st.phase===PHASE.EXECUTION){
+    const accused = st.executionTarget;
+    const accusedName = accused!=null ? (st.players.find(p=>p.id===accused)?.name || '') : '';
+    el.innerHTML = `<div class="big">처형</div><div class="muted">${accusedName ? accusedName+' 대상' : '무효 가능'}</div>`;
+    return;
+  }
+  el.textContent = st.phase;
+}
+
 async function applyState(st){
-  // deck
-  if(st.deckInfo){
+  // 연결 뱃지/타이머는 항상 갱신 (heartbeat 변화로 렌더가 흔들리지 않게)
+  updateHudBadge();
+  updateTimerBadge();
+
+  // render는 "게임 화면에 영향을 주는 값"이 바뀔 때만 수행
+  const sig = makeRenderSig(st);
+  const needRender = (sig !== lastRenderSig);
+
+  // deck 캐시(배정 화면에서 카드 X표 표시용)
+  if(st && st.deckInfo){
     deal.active = (st.phase===PHASE.DEAL);
-    deal.deckCount = st.deckInfo.count;
+    deal.deckCount = st.deckInfo.count || 0;
     deal.used = st.deckInfo.used || Array.from({length:deal.deckCount}).map(()=>false);
   }else{
     deal.active=false;
   }
 
-  render();
-  updateHudBadge();
-  updateTimerBadge();
-  updatePhaseCenter();
+  // state 갱신
+  state = st;
+
+  if(needRender){
+    lastRenderSig = sig;
+    render();
+    updatePhaseCenter();
+  }else{
+    // 중앙 문구/바만 가볍게 갱신
+    updatePhaseCenter();
+  }
 
   // eventQueue(이벤트/연출) 처리: token이 바뀔 때 1회 재생
+  // (eventQueue.token은 sig에 포함되어 있어 token이 바뀌면 needRender=true가 됨)
   if(st.eventQueue && typeof st.eventQueue.token === 'number' && st.eventQueue.token !== lastEventToken){
     lastEventToken = st.eventQueue.token;
-    const events = Array.isArray(st.eventQueue.events) ? st.eventQueue.events : [];
-    eventPlayback = eventPlayback.then(async()=>{
-      for(const ev of events){
-        if(ev.type==='DEAL_REVEAL'){
-          // 카드 사용 표시
-          if(typeof ev.cardIndex==='number') deal.used[ev.cardIndex]=true;
-          render();
-          const p = st.players?.find(x=>x.id===ev.playerId);
-          await showReveal(p?.name || 'PLAYER', ev.role);
-        }else{
-          await showEvent(ev);
-        }
+    // 이벤트로 카드 사용 처리(이중 안전장치)
+    const evs = st.eventQueue.events || [];
+    for(const ev of evs){
+      if(ev.type==='DEAL_REVEAL'){
+        if(typeof ev.cardIndex==='number') deal.used[ev.cardIndex]=true;
       }
-    }).catch(()=>{});
+    }
   }
 }
+
+async function connectRoom(){
+  const inp = document.getElementById('roomCode');
+  roomCode = String(inp?.value || roomCode || '').trim();
+
+  if(!/^\d{4}$/.test(roomCode)){
+    connected=false;
+    alert('4자리 방 코드가 필요합니다.');
+    render();
+    return;
+  }
+
+  try{
+    const st = await getState(roomCode);
+    if(!st || !st.phase){
+      connected=false;
+      alert('해당 방을 찾을 수 없습니다. 방 코드가 맞는지 확인하세요.');
+      render();
+      return;
+    }
+    if(!st.hostHeartbeat || (Date.now()-st.hostHeartbeat > 5000)){
+      connected=false;
+      alert('사회자 연결이 감지되지 않습니다. 잠시 후 다시 시도하세요.');
+      render();
+      return;
+    }
+    connected=true;
+    await patchState(roomCode, {clientHeartbeat: Date.now()});
+    state = st;
+    await applyState(st);
+    startTimers();
+  }catch(e){
+    connected=false;
+    alert('접속 실패: ' + (e.message || String(e)));
+    render();
+  }
+}
+
+function startTimers(){
+  if(pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(pollOnce, 1000);
+
+  if(beatTimer) clearInterval(beatTimer);
+  beatTimer = setInterval(()=>{
+    if(roomCode) patchState(roomCode, {clientHeartbeat: Date.now()}).catch(()=>{});
+  }, 2000);
+
+  if(timerTick) clearInterval(timerTick);
+  timerTick = setInterval(()=>{
+    updateTimerBadge();
+    updatePhaseCenter();
+  }, 500);
+}
+
+async function pollOnce(){
+  if(!roomCode) return;
+  try{
+    const st = await getState(roomCode);
+    if(!st || !st.phase){
+      connected=false;
+      state=null;
+      render();
+      return;
+    }
+    connected = !!(st.hostHeartbeat && (Date.now()-st.hostHeartbeat < 5000));
+    await applyState(st);
+  }catch{
+    connected=false;
+    // 화면은 유지하되 뱃지만 끈다
+    updateHudBadge();
+  }
+}
+
+// 초기 렌더
+render();
