@@ -1,103 +1,101 @@
-// GAS JSONP client (CORS 우회 / POST 미사용)
-
-export const GAS_URL = "https://script.google.com/macros/s/AKfycbzI27Gw3Uam7az9BwT4yWeehbcRQD8bdwNJNeU2uhlB-Oe2BHkzC6RfScYnIqTAG0HN-g/exec"; // .../exec
+// GAS JSONP sync layer (NO POST, NO CORS)
+// ✅ 너가 배포한 GAS Web App URL 넣기
+export const GAS_URL = "https://script.google.com/macros/s/AKfycbxgT6w9FvpexHQEfa16SPzI36hbPM3MurdbjSdkXp5F4j3aIuP_hKHPrYq8LAlhS9r5bQ/exec";
 
 function mustHaveUrl(){
-  if(!GAS_URL) throw new Error("GAS_URL이 비어있습니다. js/gasApi.js에 설정하세요.");
+  if(!GAS_URL) throw new Error("GAS_URL이 비어있습니다. js/gasApi.js에 GAS_URL을 넣어주세요");
 }
 
-function b64UrlEncodeJson(obj){
+function b64Json(obj){
   const json = JSON.stringify(obj);
+  // utf8-safe base64
   const bytes = new TextEncoder().encode(json);
   let bin = "";
   bytes.forEach(b => bin += String.fromCharCode(b));
-  const b64 = btoa(bin);
-  // url-safe
-  return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  return btoa(bin);
 }
 
-function jsonpFetch(url){
+function jsonp(params, timeoutMs=8000){
+  mustHaveUrl();
   return new Promise((resolve, reject) => {
-    const cb = "__cb_" + Math.random().toString(36).slice(2);
-    const sep = url.includes("?") ? "&" : "?";
-    const full = url + sep + "callback=" + encodeURIComponent(cb);
+    const cb = "__gas_cb_" + Math.random().toString(36).slice(2);
+    const u = new URL(GAS_URL);
 
-    const script = document.createElement("script");
-    script.src = full;
-    script.async = true;
+    params.callback = cb;
+    Object.entries(params).forEach(([k,v]) => u.searchParams.set(k, String(v)));
 
+    let done = false;
     const timer = setTimeout(() => {
+      if(done) return;
+      done = true;
       cleanup();
-      reject(new Error("JSONP timeout"));
-    }, 8000);
+      reject(new Error("GAS JSONP timeout"));
+    }, timeoutMs);
 
     function cleanup(){
       clearTimeout(timer);
-      delete window[cb];
-      script.remove();
+      try{ delete window[cb]; }catch{}
+      if(script && script.parentNode) script.parentNode.removeChild(script);
     }
 
     window[cb] = (data) => {
+      if(done) return;
+      done = true;
       cleanup();
       resolve(data);
     };
 
+    const script = document.createElement("script");
+    script.src = u.toString();
     script.onerror = () => {
+      if(done) return;
+      done = true;
       cleanup();
-      reject(new Error("JSONP load failed"));
+      reject(new Error("GAS JSONP load failed"));
     };
-
     document.head.appendChild(script);
   });
-}
-
-async function call(op, params={}){
-  mustHaveUrl();
-  const q = new URLSearchParams({ op, ...params });
-  return await jsonpFetch(`${GAS_URL}?${q.toString()}`);
 }
 
 export function genRoomCode(){
   return String(Math.floor(1000 + Math.random()*9000));
 }
 
+export async function ping(){
+  const r = await jsonp({ op:"ping" });
+  return r;
+}
+
 export async function getState(roomCode){
-  const res = await call("state", { room: roomCode });
-  if(res && res.ok) return res.state;
-  throw new Error((res && res.error) ? res.error : "getState failed");
+  const r = await jsonp({ op:"state", room: roomCode });
+  return r;
 }
 
 export async function setState(roomCode, state){
-  const b64 = b64UrlEncodeJson(state);
-  const res = await call("setState", { room: roomCode, b64 });
-  if(res && res.ok) return true;
-  throw new Error((res && res.error) ? res.error : "setState failed");
+  const payload = b64Json({ roomCode, state });
+  const r = await jsonp({ op:"setState", payload });
+  return r;
 }
 
 export async function patchState(roomCode, patch){
-  const b64 = b64UrlEncodeJson(patch);
-  const res = await call("patchState", { room: roomCode, b64 });
-  if(res && res.ok) return true;
-  throw new Error((res && res.error) ? res.error : "patchState failed");
-}
-
-export async function pullActions(roomCode){
-  const res = await call("actions", { room: roomCode });
-  if(res && res.ok) return res.actions || [];
-  throw new Error((res && res.error) ? res.error : "pullActions failed");
+  const payload = b64Json({ roomCode, patch });
+  const r = await jsonp({ op:"patchState", payload });
+  return r;
 }
 
 export async function pushAction(roomCode, action){
-  const b64 = b64UrlEncodeJson(action);
-  const res = await call("pushAction", { room: roomCode, b64 });
-  if(res && res.ok) return res.pushed;
-  throw new Error((res && res.error) ? res.error : "pushAction failed");
+  const payload = b64Json({ roomCode, action });
+  const r = await jsonp({ op:"pushAction", payload });
+  return r;
+}
+
+export async function pullActions(roomCode){
+  const r = await jsonp({ op:"actions", room: roomCode });
+  return r;
 }
 
 export async function clearActions(roomCode, uptoId=null){
-  const params = { room: roomCode };
-  if(uptoId != null) params.uptoId = String(uptoId);
-  const res = await call("clearActions", params);
-  if(res && res.ok) return true;
-  throw new Error((res && res.error) ? res.error : "clearActions failed");
+  const payload = b64Json({ roomCode, uptoId });
+  const r = await jsonp({ op:"clearActions", payload });
+  return r;
 }
