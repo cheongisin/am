@@ -45,3 +45,26 @@
 @media(min-width:900px){ .voteGrid{grid-template-columns:repeat(3,1fr);} }
 .pill{padding:10px;border:1px solid rgba(255,255,255,.08);border-radius:14px;background:rgba(15,23,42,.55);cursor:pointer;text-align:center}
 .pill.disabled{opacity:.35;cursor:not-allowed}
+
+/* ===== 좌측 사회자 패널 ===== */
+.stage{
+  display:flex;
+  gap:12px;
+  width:min(96vw,1100px);
+}
+
+.hostPanel{
+  width:160px;
+  min-width:150px;
+  border:1px solid rgba(255,255,255,.08);
+  border-radius:16px;
+  background:#020617;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+}
+
+.seat.host{
+  position:relative;
+  transform:none;
+}
