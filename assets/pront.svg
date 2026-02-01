@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" aria-label="사회자">
+  <rect width="256" height="256" fill="#ffffff"/>
+  <g fill="none" stroke="#1f1f1f" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="72" cy="64" r="22" fill="#1f1f1f"/>
+    <rect x="44" y="92" width="56" height="44" rx="6"/>
+    <rect x="32" y="140" width="80" height="32" rx="6"/>
+    <line x1="168" y1="56" x2="168" y2="176"/>
+    <path d="M168 64h48l-16 28h-32z"/>
+    <rect x="152" y="184" width="80" height="18" rx="6"/>
+  </g>
+</svg>

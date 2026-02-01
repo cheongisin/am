@@ -15,6 +15,13 @@ let pollTimer=null;
 let beatTimer=null;
 let timerTick=null;
 let lastEventToken=0;
+let eventPlayback = Promise.resolve();
+
+const previewState = typeof window !== 'undefined' ? window.__AM_PREVIEW_STATE__ : null;
+if(previewState){
+  state = previewState;
+  connected = true;
+}
 
 function formatTimer(seconds){
   const s = Math.max(0, Number(seconds) || 0);
@@ -104,19 +111,46 @@ function render(){
     </div>
   `;
   const table=root.querySelector('#table');
-  const n=state.players.length;
-  state.players.forEach((p,i)=>{
-    const ang=(Math.PI*2)*(i/n)-Math.PI/2;
+  const hostSeat = {
+    id: 'host',
+    name: '사회자',
+    img: 'assets/pront.svg',
+    dead: false,
+    cardKey: 'host'
+  };
+  const totalSeats = state.players.length + 1;
+  const hostSlotIndex = Math.floor(totalSeats / 2); // 6시 방향
+  const slots = Array.from({length: totalSeats}, () => null);
+  slots[hostSlotIndex] = hostSeat;
+  let playerIndex = 0;
+  for(let i=0;i<slots.length;i++){
+    if(slots[i]) continue;
+    slots[i] = state.players[playerIndex];
+    playerIndex += 1;
+  }
+  slots.forEach((slot, i)=>{
+    if(!slot) return;
+    const ang=(Math.PI*2)*(i/totalSeats)-Math.PI/2;
     const r=40;
     const x=50+Math.cos(ang)*r;
     const y=50+Math.sin(ang)*r;
-    const alive = p.alive;
-    const cardKey = state.winner ? (p.role || p.publicCard) : p.publicCard;
+    if(slot.id === 'host'){
+      const seat=el(`
+        <div class="seat" style="left:${x}%; top:${y}%">
+          <div class="imgwrap"><img src="${slot.img}" alt="사회자"></div>
+          <div class="name">${slot.name}</div>
+        </div>
+      `);
+      table.appendChild(seat);
+      return;
+    }
+    const alive = slot.alive;
+    const cardKey = state.winner ? (slot.role || slot.publicCard) : slot.publicCard;
     const img = !alive ? (DEAD_CARD[cardKey] || CARD[cardKey] || CARD.CITIZEN) : (CARD[cardKey] || CARD.CITIZEN);
     const seat=el(`
-      <div class="seat ${p.alive?'':'dead'}" style="left:${x}%; top:${y}%">
+      <div class="seat ${slot.alive?'':'dead'}" style="left:${x}%; top:${y}%">
         <div class="imgwrap"><img src="${img}" alt="${cardKey}"></div>
-        <div class="name">${p.name}</div>
+        <div class="name">${slot.name}</div>
       </div>
     `);
     table.appendChild(seat);
@@ -163,12 +197,59 @@ async function showReveal(playerName, role){
   overlay.remove();
 }
 
-async function showEvent(type){
+function playerNameFrom(stateRef, id){
+  if(id==null) return '플레이어';
+  const p = stateRef?.players?.find(x=>x.id===id);
+  return p?.name || '플레이어';
+}
+
+function eventCaption(ev, stateRef){
+  const type = ev?.type;
+  if(type === 'MAFIA_KILL'){
+    const name = playerNameFrom(stateRef, ev.victimId);
+    return `${name}이(가) 살해 당하였습니다.`;
+  }
+  if(type === 'EXECUTION'){
+    if(ev.terroristId != null){
+      const terrorist = playerNameFrom(stateRef, ev.terroristId);
+      const target = ev.executorName || playerNameFrom(stateRef, ev.executorId);
+      return `테러리스트 ${terrorist}님이 ${target}님을 습격 하였습니다.`;
+    }
+    if(ev.executedId != null){
+      const name = playerNameFrom(stateRef, ev.executedId);
+      return `${name}이(가) 처형되었습니다.`;
+    }
+    return '';
+  }
+  if(type === 'TERROR_CHAIN'){
+    const terrorist = playerNameFrom(stateRef, ev.terroristId);
+    const target = playerNameFrom(stateRef, ev.targetId);
+    return `테러리스트 ${terrorist}님이 ${target}님을  습격 하였습니다.`;
+  }
+  if(type === 'DOCTOR_SAVE'){
+    const name = playerNameFrom(stateRef, ev.savedId);
+    return `${name}님이 의사의 치료를 받고 살아났습니다.`;
+  }
+  if(type === 'REPORTER_NEWS'){
+    const name = playerNameFrom(stateRef, ev.targetId);
+    const roleName = ROLE_LABEL[ev.role] || ev.role || '';
+    return `특종입니다! ${name}님이 ${roleName}(이)라는 소식 입니다!.`;
+  }
+  if(type === 'ARMY_SAVE'){
+    const name = playerNameFrom(stateRef, ev.savedId);
+    return `군인 ${name}님이 공격을 버텨냈습니다.`;
+  }
+  return '';
+}
+
+async function showEvent(ev){
+  const type = ev?.type || 'MAFIA_KILL';
   const src = EVENT_IMG[type] || EVENT_IMG.MAFIA_KILL;
+  const caption = eventCaption(ev, state);
   const overlay = el(`
     <div class="event-overlay">
       <img class="event-img" src="${src}" alt="${type}">
-      <div class="event-caption">8초</div>
+      <div class="event-caption">${caption}</div>
     </div>
   `);
   document.body.appendChild(overlay);
@@ -212,7 +293,7 @@ connected=true;
 
 function startTimers(){
   if(pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(pollOnce, 1000);
+  pollTimer = setInterval(pollOnce, 500);
   if(beatTimer) clearInterval(beatTimer);
   beatTimer = setInterval(()=>{
     if(roomCode) patchState(roomCode, {clientHeartbeat: Date.now()}).catch(()=>{});
@@ -230,8 +311,7 @@ async function pollOnce(){
     const st = await getState(roomCode);
     if(!st || !st.phase){
       connected=false;
-      state=null;
-      render();
+      updateHudBadge();
       return;
     }
     // 연결 판정: hostHeartbeat가 최근 5초 이내면 연결 성공
@@ -327,16 +407,18 @@ async function applyState(st){
   if(st.eventQueue && typeof st.eventQueue.token === 'number' && st.eventQueue.token !== lastEventToken){
     lastEventToken = st.eventQueue.token;
     const events = Array.isArray(st.eventQueue.events) ? st.eventQueue.events : [];
-    for(const ev of events){
-      if(ev.type==='DEAL_REVEAL'){
-        // 카드 사용 표시
-        if(typeof ev.cardIndex==='number') deal.used[ev.cardIndex]=true;
-        render();
-        const p = st.players?.find(x=>x.id===ev.playerId);
-        await showReveal(p?.name || 'PLAYER', ev.role);
-      }else{
-        await showEvent(ev.type);
+    eventPlayback = eventPlayback.then(async()=>{
+      for(const ev of events){
+        if(ev.type==='DEAL_REVEAL'){
+          // 카드 사용 표시
+          if(typeof ev.cardIndex==='number') deal.used[ev.cardIndex]=true;
+          render();
+          const p = st.players?.find(x=>x.id===ev.playerId);
+          await showReveal(p?.name || 'PLAYER', ev.role);
+        }else{
+          await showEvent(ev);
+        }
       }
-    }
+    }).catch(()=>{});
   }
 }

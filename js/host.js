@@ -589,8 +589,20 @@ function wireControlPanel(){
       if(game.executionTarget!=null){
         result=execute(game, game.executionTarget);
       }
-      const evs=[{type:'EXECUTION'}];
-      if(result.chain.length) evs.push({type:'TERROR_CHAIN'});
+      const executedId = game.executionTarget;
+      const executedPlayer = executedId!=null ? game.players[executedId] : null;
+      const evs=[{type:'EXECUTION', executedId}];
+      if(executedPlayer?.role===ROLE.TERRORIST){
+        evs[0].terroristId = executedId;
+        evs[0].executorName = '처형자';
+      }
+      if(result.chain.length){
+        evs.push({
+          type:'TERROR_CHAIN',
+          terroristId: executedId,
+          targetId: result.chain[0]
+        });
+      }
       game.eventQueue = { token: Date.now(), events: evs };
       const winner=checkWin(game);
       if(winner){ game.phase=PHASE.END; game.winner=winner; setTimerStopped(); }

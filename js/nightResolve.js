@@ -15,7 +15,7 @@ export function resolveNight(state, draft){
   if(mafiaAttack && !doctorSave && !bulletproofSave) dead.add(draft.mafiaTarget);
   if(bulletproofSave && targetPlayer){
     targetPlayer.armorUsed = true;
-    events.push({type:'ARMY_SAVE'});
+    events.push({type:'ARMY_SAVE', savedId: targetPlayer.id});
   }
 
   if(draft.terroristId!=null && alive(draft.terroristId)){
@@ -32,15 +32,17 @@ export function resolveNight(state, draft){
     }
   }
 
-  if(doctorSave) events.push({type:'DOCTOR_SAVE'});
+  if(doctorSave) events.push({type:'DOCTOR_SAVE', savedId: draft.mafiaTarget});
   else if(dead.size>0){
-    events.push({type:'MAFIA_KILL'});
+    const victimId = [...dead][0];
+    events.push({type:'MAFIA_KILL', victimId});
     if(dead.size>1) events.push({type:'SPECIAL_KILL'});
   }
 
   let reporterRevealTarget = null;
   if(draft.reporterUsed && !state.reporterUsedOnce && state.night>=2 && draft.reporterId!=null && alive(draft.reporterId) && !dead.has(draft.reporterId) && draft.reporterTarget!=null){
-    events.push({type:'REPORTER_NEWS', targetId:draft.reporterTarget});
+    const target = state.players[draft.reporterTarget];
+    events.push({type:'REPORTER_NEWS', targetId:draft.reporterTarget, role: target?.role || null});
     reporterRevealTarget = draft.reporterTarget;
     state.reporterUsedOnce = true;
   }
