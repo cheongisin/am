@@ -1,55 +1,58 @@
 // Google Apps Script (GAS) sync layer
-// ✅ iOS/Safari 안정화: "POST 금지" + "GET(JSONP)만 사용"
-
-export const GAS_URL = "https://script.google.com/macros/s/AKfycbyK1_LzmRSiv4iFAeN5xuU_vFpXj1GgfP5TEHVJ-5xREQvJ_4pCJGql0hR8E-ATakt_mg/exec"; // 예: https://script.google.com/macros/s/XXXX/exec
+// CORS 우회: 읽기=JSONP(GET), 쓰기=Simple POST(text/plain) + no-cors
+// ✅ 아래 GAS_URL만 본인 /exec 로 바꿔주세요.
+export const GAS_URL = "https://script.google.com/macros/s/AKfycbzkFy0YQflrMWDx3Fqm6oXDE4oyApQ-9bGrvFdKdEJ_8T0nyRSdc0IhFOixvh-1mc1Wjw/exec";
 
 function mustHaveUrl(){
-  if(!GAS_URL) throw new Error('GAS_URL이 비어있습니다. js/gasApi.js의 GAS_URL을 설정하세요');
+  if(!GAS_URL) throw new Error("GAS_URL이 비어있습니다. js/gasApi.js의 GAS_URL을 설정하세요.");
 }
 
-// base64url
-function b64urlEncode(str){
-  const bytes = new TextEncoder().encode(str);
-  let bin = '';
-  bytes.forEach(b => bin += String.fromCharCode(b));
-  const b64 = btoa(bin).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
-  return b64;
-}
-
-// JSONP 호출 (CORS 회피)
+// ---------- JSONP (GET only) ----------
 function jsonp(url){
-  return new Promise((resolve, reject)=>{
-    const cb = '__cb_' + Math.random().toString(36).slice(2);
-    const script = document.createElement('script');
-    const sep = url.includes('?') ? '&' : '?';
-    const full = `${url}${sep}callback=${cb}`;
-
-    window[cb] = (data)=>{
-      cleanup();
-      resolve(data);
+  return new Promise((resolve, reject) => {
+    const cb = "__gas_cb_" + Math.random().toString(36).slice(2);
+    const cleanup = () => {
+      try { delete window[cb]; } catch(e){ window[cb] = undefined; }
+      if (script && script.parentNode) script.parentNode.removeChild(script);
     };
 
-    function cleanup(){
-      try{ delete window[cb]; }catch(e){ window[cb]=undefined; }
-      if(script && script.parentNode) script.parentNode.removeChild(script);
-    }
+    window[cb] = (data) => { cleanup(); resolve(data); };
 
-    script.onerror = ()=>{
-      cleanup();
-      reject(new Error('Load failed'));
-    };
+    const sep = url.includes("?") ? "&" : "?";
+    const full = `${url}${sep}cb=${encodeURIComponent(cb)}&ts=${Date.now()}`;
 
+    const script = document.createElement("script");
     script.src = full;
+    script.async = true;
+    script.onerror = () => { cleanup(); reject(new Error("JSONP load failed")); };
     document.head.appendChild(script);
   });
 }
 
+// ---------- Write (POST) without CORS preflight ----------
+async function postNoCors(payload){
+  mustHaveUrl();
+  // text/plain은 "simple request"라 preflight를 피함
+  // mode:no-cors로 응답을 읽지 않고도 전송 성공 처리
+  await fetch(GAS_URL, {
+    method: "POST",
+    mode: "no-cors",
+    cache: "no-store",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify(payload),
+  });
+  // no-cors라 응답 내용을 읽을 수 없으니, 여기서는 성공했다고만 간주
+  return { ok: true };
+}
+
+// ---------- Helpers ----------
 export function genRoomCode(){
-  return String(Math.floor(1000 + Math.random()*9000));
+  return String(Math.floor(1000 + Math.random() * 9000));
 }
 
 export async function ping(){
   mustHaveUrl();
+  // ping은 JSONP로 안전하게 읽기
   return await jsonp(`${GAS_URL}?op=ping`);
 }
 
@@ -58,34 +61,23 @@ export async function getState(roomCode){
   return await jsonp(`${GAS_URL}?op=state&room=${encodeURIComponent(roomCode)}`);
 }
 
-// ✅ 쓰기 동작도 전부 GET + payload(base64url JSON)
-export async function setState(roomCode, state){
+export async function pullActions(roomCode){
   mustHaveUrl();
-  const payload = b64urlEncode(JSON.stringify(state));
-  return await jsonp(`${GAS_URL}?op=setState&room=${encodeURIComponent(roomCode)}&payload=${payload}`);
+  return await jsonp(`${GAS_URL}?op=actions&room=${encodeURIComponent(roomCode)}`);
+}
+
+export async function setState(roomCode, state){
+  return await postNoCors({ op:"setState", roomCode, state });
 }
 
 export async function patchState(roomCode, patch){
-  mustHaveUrl();
-  const payload = b64urlEncode(JSON.stringify(patch));
-  return await jsonp(`${GAS_URL}?op=patchState&room=${encodeURIComponent(roomCode)}&payload=${payload}`);
+  return await postNoCors({ op:"patchState", roomCode, patch });
 }
 
 export async function pushAction(roomCode, action){
-  mustHaveUrl();
-  const payload = b64urlEncode(JSON.stringify(action));
-  return await jsonp(`${GAS_URL}?op=pushAction&room=${encodeURIComponent(roomCode)}&payload=${payload}`);
-}
-
-export async function pullActions(roomCode, since=0){
-  mustHaveUrl();
-  return await jsonp(`${GAS_URL}?op=actions&room=${encodeURIComponent(roomCode)}&since=${encodeURIComponent(String(since))}`);
+  return await postNoCors({ op:"pushAction", roomCode, action });
 }
 
 export async function clearActions(roomCode, uptoId=null){
-  mustHaveUrl();
-  if(uptoId==null){
-    return await jsonp(`${GAS_URL}?op=clearActions&room=${encodeURIComponent(roomCode)}`);
-  }
-  return await jsonp(`${GAS_URL}?op=clearActions&room=${encodeURIComponent(roomCode)}&uptoId=${encodeURIComponent(String(uptoId))}`);
+  return await postNoCors({ op:"clearActions", roomCode, uptoId });
 }
