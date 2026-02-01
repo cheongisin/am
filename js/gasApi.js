@@ -1,60 +1,55 @@
-// GAS JSONP sync layer (NO POST, NO CORS)
-// ✅ 너가 배포한 GAS Web App URL 넣기
-export const GAS_URL = "https://script.google.com/macros/s/AKfycbxgT6w9FvpexHQEfa16SPzI36hbPM3MurdbjSdkXp5F4j3aIuP_hKHPrYq8LAlhS9r5bQ/exec";
+// js/gasApi.js - JSONP only (CORS 회피), GAS Web App Sync Layer
+
+export const GAS_URL = "https://script.google.com/macros/s/AKfycbwC23PdK8meMGDsm-UBYkOpjk61JFOeRTLAPihKX-g0oG7j0sio3C7bylAObvW_DAtQ2g/exec"; // https://script.google.com/macros/s/XXXX/exec
 
 function mustHaveUrl(){
-  if(!GAS_URL) throw new Error("GAS_URL이 비어있습니다. js/gasApi.js에 GAS_URL을 넣어주세요");
+  if(!GAS_URL) throw new Error("GAS_URL이 비어있습니다. js/gasApi.js에 exec URL을 넣으세요.");
 }
 
-function b64Json(obj){
-  const json = JSON.stringify(obj);
-  // utf8-safe base64
-  const bytes = new TextEncoder().encode(json);
+function b64urlEncode(str){
+  const bytes = new TextEncoder().encode(str);
   let bin = "";
-  bytes.forEach(b => bin += String.fromCharCode(b));
-  return btoa(bin);
+  for (let i=0;i<bytes.length;i++) bin += String.fromCharCode(bytes[i]);
+  const b64 = btoa(bin).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+  return b64;
 }
 
-function jsonp(params, timeoutMs=8000){
+function jsonp(params){
   mustHaveUrl();
   return new Promise((resolve, reject) => {
-    const cb = "__gas_cb_" + Math.random().toString(36).slice(2);
-    const u = new URL(GAS_URL);
+    const cbName = "__gas_cb_" + Math.random().toString(16).slice(2);
+    const url = new URL(GAS_URL);
+    Object.entries(params).forEach(([k,v]) => url.searchParams.set(k, String(v)));
 
-    params.callback = cb;
-    Object.entries(params).forEach(([k,v]) => u.searchParams.set(k, String(v)));
+    url.searchParams.set("callback", cbName);
 
-    let done = false;
-    const timer = setTimeout(() => {
-      if(done) return;
-      done = true;
-      cleanup();
-      reject(new Error("GAS JSONP timeout"));
-    }, timeoutMs);
+    const script = document.createElement("script");
+    script.async = true;
+    script.src = url.toString();
 
-    function cleanup(){
-      clearTimeout(timer);
-      try{ delete window[cb]; }catch{}
-      if(script && script.parentNode) script.parentNode.removeChild(script);
-    }
+    const cleanup = () => {
+      delete window[cbName];
+      script.remove();
+    };
 
-    window[cb] = (data) => {
-      if(done) return;
-      done = true;
+    window[cbName] = (data) => {
       cleanup();
       resolve(data);
     };
 
-    const script = document.createElement("script");
-    script.src = u.toString();
     script.onerror = () => {
-      if(done) return;
-      done = true;
       cleanup();
-      reject(new Error("GAS JSONP load failed"));
+      reject(new Error("JSONP load failed (네트워크/배포URL/권한 확인)"));
     };
+
     document.head.appendChild(script);
   });
+}
+
+function unwrap(resp){
+  // 서버가 {ok:true,state:{...}} 형태로 주므로 여기서 통일
+  if (resp && resp.ok === false) return resp; // caller가 판단
+  return resp;
 }
 
 export function genRoomCode(){
@@ -62,40 +57,47 @@ export function genRoomCode(){
 }
 
 export async function ping(){
-  const r = await jsonp({ op:"ping" });
+  const r = unwrap(await jsonp({ op:"ping" }));
+  if (r.ok === false) throw new Error(r.error || "ping_failed");
   return r;
 }
 
 export async function getState(roomCode){
-  const r = await jsonp({ op:"state", room: roomCode });
-  return r;
+  const r = unwrap(await jsonp({ op:"state", room: roomCode }));
+  if (r.ok === false) return r;          // {ok:false,error:"not_found"...}
+  return r.state ?? r;                   // 혹시 예전 포맷도 허용
 }
 
 export async function setState(roomCode, state){
-  const payload = b64Json({ roomCode, state });
-  const r = await jsonp({ op:"setState", payload });
+  const data = b64urlEncode(JSON.stringify({ roomCode, state }));
+  const r = unwrap(await jsonp({ op:"setState", data }));
+  if (r.ok === false) throw new Error(r.error || "setState_failed");
   return r;
 }
 
 export async function patchState(roomCode, patch){
-  const payload = b64Json({ roomCode, patch });
-  const r = await jsonp({ op:"patchState", payload });
+  const data = b64urlEncode(JSON.stringify({ roomCode, patch }));
+  const r = unwrap(await jsonp({ op:"patchState", data }));
+  if (r.ok === false) throw new Error(r.error || "patchState_failed");
   return r;
 }
 
 export async function pushAction(roomCode, action){
-  const payload = b64Json({ roomCode, action });
-  const r = await jsonp({ op:"pushAction", payload });
+  const data = b64urlEncode(JSON.stringify({ roomCode, action }));
+  const r = unwrap(await jsonp({ op:"pushAction", data }));
+  if (r.ok === false) throw new Error(r.error || "pushAction_failed");
   return r;
 }
 
 export async function pullActions(roomCode){
-  const r = await jsonp({ op:"actions", room: roomCode });
-  return r;
+  const r = unwrap(await jsonp({ op:"actions", room: roomCode }));
+  if (r.ok === false) return r;
+  return r.actions ?? [];
 }
 
 export async function clearActions(roomCode, uptoId=null){
-  const payload = b64Json({ roomCode, uptoId });
-  const r = await jsonp({ op:"clearActions", payload });
+  const data = b64urlEncode(JSON.stringify({ roomCode, uptoId }));
+  const r = unwrap(await jsonp({ op:"clearActions", data }));
+  if (r.ok === false) throw new Error(r.error || "clearActions_failed");
   return r;
 }
