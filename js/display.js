@@ -153,7 +153,7 @@ function renderDealPanelInner(state) {
   const remain = used.filter(v => !v).length;
 
   return `
-    <div class="dealModal" role="dialog" aria-modal="true">
+    <div class="dealDeckModal" role="dialog" aria-modal="true">
       <div class="dealHeader">
         <h3 style="margin:0">직업 배정</h3>
         <div class="muted small">남은 카드 ${remain}</div>
@@ -176,6 +176,14 @@ function renderDealPanelInner(state) {
   `;
 }
 
+function renderDealBoardOverlay(state) {
+  return `
+    <div class="dealBoardBackdrop" id="dealBoardBackdrop">
+      ${renderDealPanelInner(state)}
+    </div>
+  `;
+}
+
 function ensureOverlayRoot() {
   let el = document.getElementById('overlayRoot');
   if (el) return el;
@@ -188,31 +196,6 @@ function ensureOverlayRoot() {
 function closeOverlayById(id) {
   const el = document.getElementById(id);
   if (el) el.remove();
-}
-
-function syncDealOverlay(state) {
-  const phase = state?.phase || PHASE.SETUP;
-
-  // DEAL 아닐 때: 딜 UI 제거
-  if (phase !== PHASE.DEAL) {
-    closeOverlayById('dealOverlay');
-    return;
-  }
-
-  const overlayRoot = ensureOverlayRoot();
-  let el = document.getElementById('dealOverlay');
-  if (!el) {
-    el = document.createElement('div');
-    el.id = 'dealOverlay';
-    el.className = 'dealBackdrop';
-    overlayRoot.appendChild(el);
-    el.addEventListener('click', (e) => {
-      if (e.target === el) el.remove();
-    });
-  }
-
-  el.innerHTML = renderDealPanelInner(state);
-  wireDeal(state);
 }
 
 function openAssignModal({ state, cardIndex }) {
@@ -271,7 +254,8 @@ function wireDeal(state) {
   const used = getDeckUsed(state);
   const closeBtn = document.getElementById('dealClose');
   if (closeBtn) closeBtn.onclick = () => {
-    closeOverlayById('dealOverlay');
+    const bd = document.getElementById('dealBoardBackdrop');
+    if (bd) bd.remove();
   };
 
   document.querySelectorAll('.cardbtn').forEach(btn => {
@@ -353,7 +337,7 @@ function renderTable(state) {
   const seatHtml = players.map((p, i) => renderSeat(p, i)).join('');
 
   root.innerHTML = `
-    <div class="board">
+    <div class="board ${phase === PHASE.DEAL ? 'dealActive' : ''}">
       <div class="hud">
         <div>
           <span class="badge">${escapeHtml(phase)}</span>
@@ -386,15 +370,15 @@ function renderTable(state) {
           ${seatHtml}
         </div>
       </div>
+
+      ${phase === PHASE.DEAL ? renderDealBoardOverlay(state) : ''}
     </div>
   `;
 
   handleEvents(state);
 
-  // 딜 UI는 항상 body overlayRoot에 올림(테이블 위 오버레이)
-  syncDealOverlay(state);
-
-  if (phase !== PHASE.DEAL) pendingDealPick.clear();
+  if (phase === PHASE.DEAL) wireDeal(state);
+  else pendingDealPick.clear();
 }
 
 /* =========================

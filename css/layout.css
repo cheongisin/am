@@ -120,18 +120,47 @@
 .dealBackdrop{
   position:fixed;
   inset:0;
-  background:rgba(2,6,23,.45);
-  -webkit-backdrop-filter: blur(10px);
-  backdrop-filter: blur(10px);
+  background:rgba(0,0,0,.55);
   display:flex;
   align-items:center;
   justify-content:center;
   padding:14px;
   z-index:9999;
 }
+
+/* DEAL(덱) 오버레이는 board 내부 absolute로 처리 */
+.board{position:relative}
+.board.dealActive .hud,
+.board.dealActive .stage{
+  filter: blur(8px);
+  opacity: .55;
+}
+
+.dealBoardBackdrop{
+  position:absolute;
+  inset:0;
+  background:rgba(2,6,23,.28);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:14px;
+  z-index:300;
+}
+
+/* 작은 모달(대상 선택 등) */
 .dealModal{
-  width:min(80vw, 1100px);
-  height:min(80vh, 720px);
+  width:min(92vw, 560px);
+  border-radius:16px;
+  border:1px solid rgba(255,255,255,.10);
+  background:rgba(2,6,23,.92);
+  box-shadow: var(--shadow);
+  padding:14px;
+}
+
+/* 큰 모달(덱 뽑기 UI) */
+.dealDeckModal{
+  width:min(80%, 1100px);
+  height:min(80%, 740px);
   border-radius:16px;
   border:1px solid rgba(255,255,255,.10);
   background:rgba(2,6,23,.92);
