@@ -23,6 +23,8 @@ let roomCode = '';
 let hostBeatTimer = null;
 let actionPollTimer = null;
 let actionPollInFlight = false;
+let syncInFlight = false;
+let syncQueued = false;
 
 let lastActionId = null;
 let pendingReporterReveal = null;
@@ -215,12 +217,24 @@ function initNightDraft() {
 
 async function sync() {
   if (!roomCode) return;
+  if (syncInFlight) { syncQueued = true; return; }
+  syncInFlight = true;
   const state = {
     roomCode,
     hostHeartbeat: Date.now(),
     ...publicState(game),
   };
-  await setState(roomCode, state);
+
+  try {
+    await setState(roomCode, state);
+  } finally {
+    syncInFlight = false;
+    if (syncQueued) {
+      syncQueued = false;
+      // 최신 game 상태로 한 번 더 flush
+      sync();
+    }
+  }
 }
 function setConnected(flag) {
   connected = !!flag;
@@ -241,10 +255,10 @@ async function startRoom(code) {
   if (hostBeatTimer) clearInterval(hostBeatTimer);
   // patchState 기반 heartbeat는 GAS 레이스에서 state를 되돌릴 수 있어 사용하지 않음.
   // 대신 setState(sync)를 주기적으로 호출해 hostHeartbeat를 갱신한다.
-  hostBeatTimer = setInterval(() => { sync().catch(()=>{}); }, 2500);
+  hostBeatTimer = setInterval(() => { sync().catch(()=>{}); }, 2000);
 
   if (actionPollTimer) clearInterval(actionPollTimer);
-  actionPollTimer = setInterval(pollActions, 1000);
+  actionPollTimer = setInterval(pollActions, 600);
 
   render();
 }

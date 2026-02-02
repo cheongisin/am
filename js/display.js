@@ -15,8 +15,8 @@ let lastRenderKey = null;
 let lastEventToken = null;
 let revealTimer = null;
 
-const POLL_MS = 1000;
-const PING_MS = 4000;
+const POLL_MS = 650;
+const PING_MS = 2500;
 const FAIL_TO_DISCONNECT = 6;
 
 // DEAL 클릭-폴링 레이스 방지(최소 로컬 상태)
@@ -262,6 +262,9 @@ function openAssignModal({ state, cardIndex }) {
     try {
       await pushAction(roomCode, { type: 'DEAL_PICK', cardIndex, playerId });
       modal.remove();
+      // 체감 속도 개선: 호스트가 곧바로 처리할 수 있으니 짧게 상태를 더 자주 당겨봄
+      setTimeout(() => { poll().catch(()=>{}); }, 250);
+      setTimeout(() => { poll().catch(()=>{}); }, 900);
     } catch {
       pendingDealPick.delete(cardIndex);
       dealPickInFlight = null;
