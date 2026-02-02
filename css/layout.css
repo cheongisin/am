@@ -20,7 +20,7 @@
   /* hostPanel 때문에 table 폭이 줄어도 마지막 열이 잘리지 않도록, 컨테이너 기준으로 좌석 폭을 자동 축소 */
   --seat-w-fit: calc((100% - (var(--seat-cols) - 1) * var(--seat-gap) - (var(--seat-pad) * 2)) / var(--seat-cols));
   /* 인원(열 수)이 적을수록 더 크게, 많을수록 fit에 맞춰 자동 축소 */
-  --seat-w: clamp(112px, var(--seat-w-fit), 175px);
+  --seat-w: clamp(112px, var(--seat-w-fit), 210px);
   /* 카드 세로 크기는 인원과 무관하게(화면 기준으로) 유지 */
   --seat-h: clamp(170px, 24vw, 240px);
   display:grid;
@@ -30,7 +30,7 @@
   gap:var(--seat-gap);
   padding:var(--seat-pad);
   align-content:center;
-  justify-content:flex-start; /* 왼쪽부터 배치(원하는 스크린샷 느낌) */
+  justify-content:center;
   justify-items:center;
 }
 

@@ -514,7 +514,7 @@ function render() {
             <span class="badge">총 ${deckSummary.total}/${game.players.length}</span>
             ${deckSummary.valid ? '' : '<span class="badge" style="background:rgba(239,68,68,.18);border-color:rgba(239,68,68,.35)">덱 오류</span>'}
           </div>
-          ${deckSummary.errors.length ? `<p class="muted small" style="color:rgba(239,68,68,.92)">${deckSummary.errors.join(' / ')}</p>` : '<p class="muted small">특수직업 합계가 인원을 넘지 않으면 시민이 자동으로 채워집니다.</p>'}
+          ${deckSummary.errors.length ? `<p class="muted small" style="color:rgba(239,68,68,.92)">${deckSummary.errors.join(' / ')}</p>` : '<p class="muted small">특수직업 합계가 인원을 넘지 않으면 시민이 자동으로 채워집니다. \n 8인 기준 마피아 2 보조 1 // 경찰 1 의사 1 특수직업 3 \n 12인 기준 마피아 3 보조 1 // 경찰 1 의사 1 특수직업 5</p>'}
         </div>
 
         <div class="actions" style="margin-top:10px">
@@ -1056,6 +1056,14 @@ function wireControlPanel() {
 function sel(title, actorId, key, optional, { allowSelf = false } = {}) {
   const actor = actorId != null ? game.players[actorId] : null;
   if (!actor || !actor.alive) return `<p class="muted small">${title}: 사용 불가</p>`;
+
+  const actorRoleLabel = ROLE_LABEL[actor.role] ?? actor.role ?? '-';
+  const sameRoleAliveNames = game.players
+    .filter(p => p.alive && p.role === actor.role)
+    .map(p => p.name)
+    .filter(Boolean);
+  const actorGroupLabel = `${actorRoleLabel} (${sameRoleAliveNames.join(', ')})`;
+
   const opts = game.players
     .filter(p => p.alive && (allowSelf ? true : (p.id !== actorId)))
     .map(p => {
@@ -1064,7 +1072,7 @@ function sel(title, actorId, key, optional, { allowSelf = false } = {}) {
     })
     .join('');
   return `
-    <label>${title} <span class="muted small">(${actor.name})</span></label>
+    <label>${title} <span class="muted small">(${actorGroupLabel})</span></label>
     <select data-key="${key}">
       <option value="">${optional ? '미사용 / 선택안함' : '대상 선택'}</option>
       ${opts}
@@ -1075,6 +1083,14 @@ function reporterBlock() {
   const rid = nightDraft.reporterId;
   const actor = rid != null ? game.players[rid] : null;
   if (!actor || !actor.alive) return `<p class="muted small">기자: 사용 불가</p>`;
+
+  const actorRoleLabel = ROLE_LABEL[actor.role] ?? actor.role ?? '-';
+  const sameRoleAliveNames = game.players
+    .filter(p => p.alive && p.role === actor.role)
+    .map(p => p.name)
+    .filter(Boolean);
+  const actorGroupLabel = `${actorRoleLabel} (${sameRoleAliveNames.join(', ')})`;
+
   const disabled = game.night < 2 || game.reporterUsedOnce;
   const checked = nightDraft.reporterUsed && !disabled;
   const opts = game.players
@@ -1082,7 +1098,7 @@ function reporterBlock() {
     .map(p => `<option value="${p.id}" ${nightDraft.reporterTarget === p.id ? 'selected' : ''}>${p.name}</option>`)
     .join('');
   return `
-    <label>기자 특보 <span class="muted small">(${actor.name})</span></label>
+    <label>기자 특보 <span class="muted small">(${actorGroupLabel})</span></label>
     <div class="actions" style="margin:6px 0">
       <input id="repUsed" type="checkbox" style="width:auto" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
       <span class="muted small">${game.reporterUsedOnce ? '이미 사용함' : (disabled ? '첫밤 불가' : '사용')}</span>
