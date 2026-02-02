@@ -3,6 +3,7 @@
 .table{
   flex:1;
   height:min(62vw, 620px);
+  min-width:0;
   border-radius:20px;
   background:
     radial-gradient(circle at 50% 38%, #1b2545 0%, #020617 70%);
@@ -14,13 +15,18 @@
 
 /* ===== 카드 그리드 테이블(요구: 8=4열, 12=6열) ===== */
 .table.grid{
-  --seat-w: clamp(120px, 12vw, 165px);
+  --seat-gap: 18px;
+  --seat-pad: 18px;
+  /* hostPanel 때문에 table 폭이 줄어도 마지막 열이 잘리지 않도록, 컨테이너 기준으로 좌석 폭을 자동 축소 */
+  --seat-w-fit: calc((100% - (var(--seat-cols) - 1) * var(--seat-gap) - (var(--seat-pad) * 2)) / var(--seat-cols));
+  /* 인원(열 수)이 적을수록 더 크게, 많을수록 fit에 맞춰 자동 축소 */
+  --seat-w: clamp(112px, var(--seat-w-fit), 175px);
   display:grid;
   grid-template-columns: repeat(var(--seat-cols, 4), var(--seat-w));
   grid-template-rows: repeat(2, min-content);
   grid-auto-flow: column; /* 위→아래→다음열(요구: 위/아래 번갈아 자리 생성) */
-  gap:18px;
-  padding:18px;
+  gap:var(--seat-gap);
+  padding:var(--seat-pad);
   align-content:center;
   justify-content:flex-start; /* 왼쪽부터 배치(원하는 스크린샷 느낌) */
   justify-items:center;

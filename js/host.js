@@ -981,27 +981,39 @@ function wireControlPanel() {
         target.publicCard = ROLE.POLITICIAN;
         game.eventQueue = { token: Date.now(), events: [{ type: 'LOBBY', politicianId: target.id }] };
       } else {
+        // 테러리스트 산화는 '대상 선택'이 선행되어야 상태가 꼬이지 않는다.
+        if (target && target.alive && target.role === ROLE.TERRORIST) {
+          const oxTargetId = game.executionOxidationTarget;
+          const oxTarget = (oxTargetId != null) ? game.players.find(p => p.id === oxTargetId) : null;
+          if (!oxTarget || !oxTarget.alive || oxTarget.id === target.id) {
+            alert('산화 대상을 선택해야 합니다.');
+            return;
+          }
+        }
+
         if (game.executionTarget != null) execute(game, game.executionTarget);
 
         const executedId = game.executionTarget;
         const executedPlayer = executedId != null ? game.players[executedId] : null;
 
-        const evs = [{ type: 'EXECUTION', executedId }];
+        // 처형으로 직업이 공개되는 케이스
         if (executedPlayer?.role === ROLE.TERRORIST) {
+          executedPlayer.publicCard = ROLE.TERRORIST;
           const oxTargetId = game.executionOxidationTarget;
           const oxTarget = (oxTargetId != null) ? game.players.find(p => p.id === oxTargetId) : null;
-          if (!oxTarget || !oxTarget.alive || oxTarget.id === executedId) {
-            alert('산화 대상을 선택해야 합니다.');
-            // 되돌리기 가능하도록 snapshot은 이미 찍었으니 즉시 되돌리기 대신 UI 재표시
-            // (처형 확정은 중단)
-            return;
-          }
+          // 위에서 선검증했으므로 여기서는 안전장치만 둔다.
+          if (!oxTarget || !oxTarget.alive || oxTarget.id === executedId) return;
           oxTarget.alive = false;
-          evs.push({ type: 'TERROR_OXIDATION', terroristId: executedId, targetId: oxTarget.id, mode: 'OXIDATION' });
+          // 산화 이벤트만 발행(EXECUTION은 발행하지 않음)
+          game.eventQueue = {
+            token: Date.now(),
+            events: [{ type: 'TERROR_OXIDATION', terroristId: executedId, targetId: oxTarget.id, mode: 'OXIDATION' }]
+          };
           game.executionOxidationTarget = null;
+        } else {
+          const evs = [{ type: 'EXECUTION', executedId }];
+          game.eventQueue = { token: Date.now(), events: evs };
         }
-
-        game.eventQueue = { token: Date.now(), events: evs };
       }
 
       const winner = checkWin(game);

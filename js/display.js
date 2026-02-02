@@ -68,10 +68,14 @@ function computeRenderKey(st) {
   const ev = st?.eventQueue?.token ?? '';
   const mode = st?.timer?.mode ?? '';
   const endAt = st?.timer?.endAt ?? '';
+  // COUNTDOWN은 endAt이 고정이므로, 초 단위 tick을 포함하지 않으면 화면이 고정되어 보일 수 있음
+  const tick = (st?.timer?.mode === 'COUNTDOWN' && st?.timer?.running)
+    ? Math.floor(Date.now() / 1000)
+    : '';
   const alive = (st?.players || []).map(p => (p?.alive === false ? '0' : '1')).join('');
   const pub = (st?.players || []).map(p => (p?.publicCard || '')).join('|');
   const used = getDeckUsed(st).map(v => (v ? '1' : '0')).join('');
-  return `${phase}|${hb}|${ev}|${mode}|${endAt}|${alive}|${pub}|${used}`;
+  return `${phase}|${hb}|${ev}|${mode}|${endAt}|${tick}|${alive}|${pub}|${used}`;
 }
 
 /* =========================
