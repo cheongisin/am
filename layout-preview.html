@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <title>Layout Preview (No Server)</title>
+  <link rel="stylesheet" href="css/theme.css">
+  <link rel="stylesheet" href="css/components.css">
+  <link rel="stylesheet" href="css/layout.css">
+  <link rel="stylesheet" href="css/effects.css">
+  <style>
+    body{margin:0}
+    .preview-controls{width:min(96vw,1100px);display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between}
+    .preview-controls .left{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    .preview-controls input[type="range"]{width:180px}
+    .preview-controls .mini{font-size:.9rem;color:var(--muted)}
+    .preview-controls button{white-space:nowrap}
+    .preview-note{width:min(96vw,1100px);color:var(--muted);font-size:.9rem}
+    /* file:// 환경에서 이미지가 없을 수도 있으니, 빈 박스라도 보이게 */
+    .seat img{background:rgba(255,255,255,.06)}
+  </style>
+</head>
+<body>
+  <div class="board">
+    <div class="hud">
+      <div class="preview-controls">
+        <div class="left">
+          <span class="badge">Layout Preview</span>
+          <label class="mini">인원 <b id="countLabel">8</b></label>
+          <input id="countRange" type="range" min="8" max="12" step="1" value="8" />
+          <label class="mini"><input id="toggleDead" type="checkbox" /> 랜덤 사망 표시</label>
+            <label class="mini">Phase</label>
+            <select id="phaseSel">
+              <option value="GAME SET">GAME SET</option>
+              <option value="NIGHT">NIGHT</option>
+              <option value="DAY" selected>DAY</option>
+              <option value="VOTE">VOTE</option>
+              <option value="MAFIA WIN">MAFIA WIN</option>
+              <option value="CITIZEN WIN">CITIZEN WIN</option>
+            </select>
+            <label class="mini">타이머(초) <b id="timerSecLabel">180</b></label>
+            <input id="timerRange" type="range" min="0" max="300" step="5" value="180" />
+        </div>
+        <div class="left">
+          <button id="btnShuffle">이름 섞기</button>
+          <button id="btnLongNames">긴 이름 토글</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="preview-note">
+      좌측 사회자 패널 + 우측 카드 그리드(좌→우, 위/아래 번갈아 자리 생성). 이 파일은 서버 없이(더블클릭)도 레이아웃만 확인합니다.
+    </div>
+
+    <div class="stage">
+      <div class="hostPanel">
+        <div class="hostStatus">
+          <div class="phase-title" id="phaseTitle">DAY</div>
+          <div class="phase-time" id="phaseTime">03:00</div>
+          <div class="timer-bar"><div class="timer-bar-fill" id="timerFill" style="width:100%"></div></div>
+          <div class="phase-sub muted" id="phaseSub">생존 8/8</div>
+        </div>
+        <div class="seat host">
+          <div class="imgwrap"><img src="assets/pront.svg" alt=""></div>
+          <div class="name">사회자</div>
+        </div>
+      </div>
+
+      <div class="table grid" id="tableRoot" style="--seat-cols:4">
+        <div id="gridSeats" style="display:contents"></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+
+  const state = {
+    count: 8,
+    longNames: false,
+    randomDead: false,
+    players: [],
+    phase: 'DAY',
+    timerSec: 180
+  };
+
+  function escapeHtml(s){
+    return String(s ?? '')
+      .replaceAll('&','&amp;')
+      .replaceAll('<','&lt;')
+      .replaceAll('>','&gt;')
+      .replaceAll('"','&quot;')
+      .replaceAll("'",'&#39;');
+  }
+
+  function colsFor(n){
+    return (Number(n) <= 8) ? 4 : 6;
+  }
+
+  function mkPlayers(n){
+    const out = [];
+    for (let i = 0; i < n; i++){
+      const name = state.longNames
+        ? `플레이어${i+1}_긴이름테스트_ABCDEFG`
+        : `P${i+1}`;
+      out.push({ id: i, name, alive: true });
+    }
+    return out;
+  }
+
+  function shuffle(a){
+    const x = [...a];
+    for (let i = x.length - 1; i > 0; i--){
+      const j = Math.floor(Math.random() * (i + 1));
+      [x[i], x[j]] = [x[j], x[i]];
+    }
+    return x;
+  }
+
+  function renderSeat(p){
+    const dead = p.alive === false;
+    return `
+      <div class="seat ${dead ? 'dead' : ''}">
+        <div class="imgwrap"><img src="assets/cards/citizen.png" alt=""></div>
+        <div class="name">${escapeHtml(p.name)}</div>
+      </div>
+    `;
+  }
+
+  function applyRandomDead(){
+    if (!state.randomDead){
+      state.players.forEach(p => p.alive = true);
+      return;
+    }
+    state.players.forEach(p => p.alive = Math.random() > 0.25);
+    // 최소 1명은 살려두기
+    if (!state.players.some(p => p.alive)) state.players[0].alive = true;
+  }
+
+  function formatTimer(sec){
+    const s = Math.max(0, Number(sec) || 0);
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    return String(m).padStart(2,'0') + ':' + String(r).padStart(2,'0');
+  }
+
+  function render(){
+    // players
+    state.players = mkPlayers(state.count);
+    applyRandomDead();
+
+    const cols = colsFor(state.players.length);
+    $('tableRoot').style.setProperty('--seat-cols', String(cols));
+    $('gridSeats').innerHTML = state.players.map(renderSeat).join('');
+
+    // center
+    const aliveCount = state.players.filter(p => p.alive).length;
+    $('phaseTitle').textContent = state.phase;
+    $('phaseTime').textContent = formatTimer(state.timerSec);
+    $('phaseSub').textContent = `생존 ${aliveCount}/${state.players.length}`;
+    const max = Number($('timerRange')?.max || 300);
+    const pct = max ? Math.max(0, Math.min(100, (state.timerSec / max) * 100)) : 0;
+    $('timerFill').style.width = pct + '%';
+    $('countLabel').textContent = String(state.count);
+    $('timerSecLabel').textContent = String(state.timerSec);
+  }
+
+  // wiring
+  $('countRange').addEventListener('input', (e) => {
+    state.count = Number(e.target.value);
+    render();
+  });
+  $('toggleDead').addEventListener('change', (e) => {
+    state.randomDead = !!e.target.checked;
+    render();
+  });
+  $('btnLongNames').addEventListener('click', () => {
+    state.longNames = !state.longNames;
+    render();
+  });
+  $('btnShuffle').addEventListener('click', () => {
+    // 현재 플레이어 배열을 섞어서 이름만 재배치
+    const names = shuffle(state.players.map(p => p.name));
+    state.players.forEach((p, i) => p.name = names[i]);
+    render();
+  });
+
+  $('phaseSel').addEventListener('change', (e) => {
+    state.phase = String(e.target.value || 'DAY');
+    render();
+  });
+
+  $('timerRange').addEventListener('input', (e) => {
+    state.timerSec = Number(e.target.value || 0);
+    render();
+  });
+
+  // init
+  $('phaseSel').value = state.phase;
+  $('timerRange').value = String(state.timerSec);
+  render();
+</script>
+</body>
+</html>

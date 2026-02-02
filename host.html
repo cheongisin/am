@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ko">
+<head>
+
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+<link rel="manifest" href="./manifest.json" />
+<meta name="theme-color" content="#020617" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Mafia42" />
+
+<title>사회자</title>
+<link rel="stylesheet" href="css/theme.css">
+<link rel="stylesheet" href="css/components.css">
+<link rel="stylesheet" href="css/layout.css">
+<link rel="stylesheet" href="css/effects.css">
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+// file:// 로 직접 열면 type=module import가 막혀 빈 화면이 될 수 있음
+(function(){
+	if (location.protocol !== 'file:') return;
+	var el = document.getElementById('app');
+	if (!el) return;
+	el.innerHTML =
+		'<div style="padding:16px;max-width:900px;margin:0 auto">'
+		+ '<h2>로컬 파일로 열려서 화면이 비어있을 수 있어요</h2>'
+		+ '<p>이 페이지는 <b>ES Module(import)</b>을 사용합니다. 브라우저 보안 정책상 <code>file://</code>에서는 모듈 로딩이 차단됩니다.</p>'
+		+ '<p>해결: VS Code <b>Live Server</b>로 열거나, 로컬 HTTP 서버로 실행하세요.</p>'
+		+ '<ul>'
+		+ '<li>Live Server: host.html 우클릭 → Open with Live Server</li>'
+		+ '<li>Python: <code>python -m http.server 5173</code> 후 <code>http://localhost:5173/host.html</code></li>'
+		+ '</ul>'
+		+ '</div>';
+})();
+</script>
+
+<script type="module" src="js/host.js"></script>
+</body>
+</html>
