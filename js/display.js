@@ -1,4 +1,4 @@
-import { genRoomCode, getState, patchState, pushAction } from './gasApi.js';
+import { genRoomCode, getState, pushAction, pullActions } from './gasApi.js';
 import { PHASE, CARD, ROLE_LABEL } from '../src/constants.js';
 
 let root = null;
@@ -9,19 +9,20 @@ let root = null;
 let connected = false;
 let roomCode = '';
 let pollTimer = null;
-let beatTimer = null;
+let pingTimer = null;
 let failures = 0;
 let lastRenderKey = null;
 let lastEventToken = null;
 let revealTimer = null;
 
-const POLL_MS = 1200;
-const BEAT_MS = 2000;
+const POLL_MS = 1000;
+const PING_MS = 4000;
 const FAIL_TO_DISCONNECT = 6;
 
 // DEAL 클릭-폴링 레이스 방지(최소 로컬 상태)
 const pendingDealPick = new Set();
 let dealPickInFlight = null; // {cardIndex, playerId, startedAt}
+let dealPickStatus = null;   // {message, kind:'info'|'warn'|'error'}
 
 /* =========================
    유틸
@@ -152,6 +153,14 @@ function renderDisconnected() {
 function renderDealPanelInner(state) {
   const used = getDeckUsed(state);
   const remain = used.filter(v => !v).length;
+  const statusHtml = dealPickStatus?.message
+    ? `<div class="muted small" style="margin-top:8px; color:${dealPickStatus.kind === 'error' ? 'rgba(239,68,68,.92)' : (dealPickStatus.kind === 'warn' ? 'rgba(251,191,36,.95)' : 'var(--muted)')}">
+         ${escapeHtml(dealPickStatus.message)}
+       </div>`
+    : '';
+  const inflightHtml = dealPickInFlight
+    ? `<div class="muted small" style="margin-top:6px">처리 중… (카드 #${dealPickInFlight.cardIndex + 1})</div>`
+    : '';
 
   return `
     <div class="dealDeckModal" role="dialog" aria-modal="true">
@@ -159,6 +168,8 @@ function renderDealPanelInner(state) {
         <h3 style="margin:0">직업 배정</h3>
         <div class="muted small">남은 카드 ${remain}</div>
       </div>
+      ${inflightHtml}
+      ${statusHtml}
       <div class="deck">
         ${used.map((u, i) => {
           const pending = pendingDealPick.has(i);
@@ -171,6 +182,7 @@ function renderDealPanelInner(state) {
         }).join('')}
       </div>
       <div class="actions" style="margin-top:12px; justify-content:flex-end">
+        ${dealPickInFlight ? '<button id="dealCancelWait">대기 취소</button>' : ''}
         <button id="dealClose">닫기</button>
       </div>
     </div>
@@ -246,12 +258,14 @@ function openAssignModal({ state, cardIndex }) {
 
     pendingDealPick.add(cardIndex);
     dealPickInFlight = { cardIndex, playerId, startedAt: Date.now() };
+    dealPickStatus = { kind: 'info', message: '배정 요청을 전송했어요. 호스트 처리 대기 중…' };
     try {
       await pushAction(roomCode, { type: 'DEAL_PICK', cardIndex, playerId });
       modal.remove();
     } catch {
       pendingDealPick.delete(cardIndex);
       dealPickInFlight = null;
+      dealPickStatus = { kind: 'error', message: '전송 실패(네트워크/GAS). 다시 시도해 주세요.' };
       modal.querySelector('#assignOk').disabled = false;
       alert('전송 실패');
     }
@@ -264,6 +278,18 @@ function wireDeal(state) {
   if (closeBtn) closeBtn.onclick = () => {
     const bd = document.getElementById('dealBoardBackdrop');
     if (bd) bd.remove();
+  };
+
+  const cancelBtn = document.getElementById('dealCancelWait');
+  if (cancelBtn) cancelBtn.onclick = () => {
+    if (!dealPickInFlight) return;
+    pendingDealPick.delete(dealPickInFlight.cardIndex);
+    dealPickInFlight = null;
+    dealPickStatus = { kind: 'warn', message: '대기를 취소했어요. 다른 카드로 다시 시도할 수 있어요.' };
+    // UI 갱신
+    const bd = document.getElementById('dealBoardBackdrop');
+    if (bd) bd.innerHTML = renderDealPanelInner(state);
+    wireDeal(state);
   };
 
   document.querySelectorAll('.cardbtn').forEach(btn => {
@@ -322,6 +348,39 @@ function handleEvents(state) {
     // ACK: 실제 배정이 반영되었다고 보고 pending 해제
     if (Number.isFinite(deal.cardIndex)) pendingDealPick.delete(Number(deal.cardIndex));
     dealPickInFlight = null;
+    dealPickStatus = null;
+  }
+}
+
+async function diagnoseDealPickTimeout({ cardIndex, playerId }) {
+  try {
+    const res = await pullActions(roomCode);
+    const actions = Array.isArray(res?.actions) ? res.actions : [];
+    const queued = actions.some(a => {
+      const m = a?.msg || a;
+      return m?.type === 'DEAL_PICK' && Number(m?.cardIndex) === Number(cardIndex) && Number(m?.playerId) === Number(playerId);
+    });
+
+    if (queued) {
+      dealPickStatus = { kind: 'warn', message: '호스트가 아직 액션을 처리하지 못했어요. (호스트 화면이 백그라운드/절전이면 지연될 수 있어요)' };
+      return;
+    }
+
+    const st = await getState(roomCode);
+    const used = getDeckUsed(st);
+    const players = Array.isArray(st?.players) ? st.players : [];
+    const p = players.find(x => Number(x?.id) === Number(playerId));
+    if (used[cardIndex] || p?.assigned) {
+      // 처리됐는데 UI가 타이밍상 못 본 케이스
+      dealPickStatus = null;
+      pendingDealPick.delete(cardIndex);
+      dealPickInFlight = null;
+      return;
+    }
+
+    dealPickStatus = { kind: 'error', message: '호스트가 배정을 반영하지 못했어요. 호스트 탭이 살아있는지 확인해 주세요.' };
+  } catch {
+    dealPickStatus = { kind: 'error', message: '상태 확인 중 오류가 발생했어요. 네트워크/GAS 상태를 확인해 주세요.' };
   }
 }
 
@@ -395,13 +454,17 @@ function renderTable(state) {
   if (dealPickInFlight && usedNow[dealPickInFlight.cardIndex]) {
     pendingDealPick.delete(dealPickInFlight.cardIndex);
     dealPickInFlight = null;
+    dealPickStatus = null;
   }
 
   // ACK가 오래 안 오면(호스트 무시/통신 실패) UI를 풀어준다
-  if (dealPickInFlight && Date.now() - dealPickInFlight.startedAt > 6000) {
-    pendingDealPick.delete(dealPickInFlight.cardIndex);
+  if (dealPickInFlight && Date.now() - dealPickInFlight.startedAt > 15000) {
+    const { cardIndex, playerId } = dealPickInFlight;
+    pendingDealPick.delete(cardIndex);
     dealPickInFlight = null;
-    alert('배정 반영이 지연되고 있어요. 다시 시도해 주세요.');
+    dealPickStatus = { kind: 'warn', message: '배정 반영이 지연되고 있어요. 원인 확인 중…' };
+    // 비동기 진단(큐에 남아있는지 / 처리됐는지)
+    diagnoseDealPickTimeout({ cardIndex, playerId });
   }
 
   if (phase === PHASE.DEAL) wireDeal(state);
@@ -427,10 +490,12 @@ async function joinRoom(code) {
     return;
   }
 
-  if (beatTimer) clearInterval(beatTimer);
-  beatTimer = setInterval(() => {
-    patchState(roomCode, { clientHeartbeat: Date.now() }).catch(()=>{});
-  }, BEAT_MS);
+  // patchState는 GAS 레이스에서 state를 되돌려버릴 수 있어 사용하지 않음.
+  // 대신 actions 큐에 PING을 넣어 host가 "연결됨"을 판단하게 한다.
+  if (pingTimer) clearInterval(pingTimer);
+  pingTimer = setInterval(() => {
+    pushAction(roomCode, { type: 'PING' }).catch(()=>{});
+  }, PING_MS);
 
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(poll, POLL_MS);

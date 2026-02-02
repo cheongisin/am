@@ -28,10 +28,8 @@ let lastActionId = null;
 let pendingReporterReveal = null;
 
 let actionPollFailures = 0;
-let lastClientCheckAt = 0;
+let lastClientPingAt = 0;
 
-// ★ 핵심: getState(연결 판정) 과호출 방지
-const CLIENT_CHECK_INTERVAL_MS = 3000; // 3초에 1번만
 const CONNECT_TIMEOUT_MS = 60000;      // 60초
 const FAIL_TO_DISCONNECT = 6;          // 연속 실패 6번 후에만 🔴
 
@@ -224,10 +222,6 @@ async function sync() {
   };
   await setState(roomCode, state);
 }
-async function heartbeat() {
-  if (!roomCode) return;
-  try { await patchState(roomCode, { hostHeartbeat: Date.now() }); } catch {}
-}
 function setConnected(flag) {
   connected = !!flag;
 }
@@ -240,12 +234,14 @@ async function startRoom(code) {
   lastActionId = null;
   pendingReporterReveal = null;
   actionPollFailures = 0;
-  lastClientCheckAt = 0;
+  lastClientPingAt = 0;
 
   await sync();
 
   if (hostBeatTimer) clearInterval(hostBeatTimer);
-  hostBeatTimer = setInterval(heartbeat, 2000);
+  // patchState 기반 heartbeat는 GAS 레이스에서 state를 되돌릴 수 있어 사용하지 않음.
+  // 대신 setState(sync)를 주기적으로 호출해 hostHeartbeat를 갱신한다.
+  hostBeatTimer = setInterval(() => { sync().catch(()=>{}); }, 2500);
 
   if (actionPollTimer) clearInterval(actionPollTimer);
   actionPollTimer = setInterval(pollActions, 1000);
@@ -267,21 +263,10 @@ async function pollActions() {
 
     const actions = (res && res.actions) ? res.actions : [];
 
-    // 액션이 없으면 '연결판정 getState'를 매번 하지 말고 3초에 1번만
+    // 액션이 없으면: 최근 PING 수신 시각으로 연결 판정
     if (!actions.length) {
-      const now = Date.now();
-      if (now - lastClientCheckAt >= CLIENT_CHECK_INTERVAL_MS) {
-        lastClientCheckAt = now;
-        try {
-          const st = await getState(roomCode);
-          const ok = st?.clientHeartbeat && (now - st.clientHeartbeat < CONNECT_TIMEOUT_MS);
-          setConnected(!!ok);
-        } catch {
-          // 여기서 바로 🔴로 내리면 버튼이 씹힘 → 실패 누적 후에만 OFF
-          actionPollFailures += 1;
-          if (actionPollFailures >= FAIL_TO_DISCONNECT) setConnected(false);
-        }
-      }
+      const ok = lastClientPingAt && (Date.now() - lastClientPingAt < CONNECT_TIMEOUT_MS);
+      setConnected(!!ok);
       renderBadgeOnly();
       return;
     }
@@ -893,6 +878,13 @@ function reporterBlock() {
 
 async function onAction(action) {
   const msg = action?.msg || action;
+
+  if (msg.type === 'PING') {
+    lastClientPingAt = Date.now();
+    setConnected(true);
+    renderBadgeOnly();
+    return;
+  }
 
   if (msg.type === 'REQ_SYNC') {
     if (pendingReporterReveal != null) {
