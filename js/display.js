@@ -1,6 +1,8 @@
 import { genRoomCode, getState, pushAction, pullActions, dealPick } from './gasApi.js';
 import { PHASE, CARD, ROLE_LABEL } from '../src/constants.js';
 
+const BUILD = '2026-02-02.1';
+
 let root = null;
 
 /* =========================
@@ -15,6 +17,9 @@ let lastRenderKey = null;
 let lastEventToken = null;
 let revealTimer = null;
 let lastKnownState = null;
+let lastNetError = null;
+let lastPollAt = 0;
+let lastPollMs = 0;
 
 const POLL_MS = 1200;
 const PING_MS = 6000;
@@ -141,14 +146,19 @@ function renderDisconnected() {
           <input id="roomInput" placeholder="4자리 코드" inputmode="numeric" />
           <button id="joinBtn" class="primary">접속</button>
         </div>
-        <div class="muted">상태: ${connected ? '🟢' : '🔴'}</div>
+        <div class="muted">상태: ${connected ? '🟢' : '🔴'} / v${BUILD}</div>
+        <div class="muted small" id="joinStatus"></div>
       </div>
     </div>
   `;
 
   document.getElementById('joinBtn').onclick = () => {
     const code = document.getElementById('roomInput').value.trim();
-    joinRoom(code);
+    const st = document.getElementById('joinStatus');
+    if (st) st.textContent = '접속 중…';
+    joinRoom(code).catch((e) => {
+      if (st) st.textContent = `접속 실패: ${e?.message || e}`;
+    });
   };
 }
 
@@ -454,6 +464,12 @@ function renderTable(state) {
   const cols = (players.length <= 8) ? 4 : 6;
   const seatHtml = players.map((p, i) => renderSeat(p, i)).join('');
 
+  const usedNow = getDeckUsed(state);
+  const usedCount = usedNow.filter(Boolean).length;
+  const remainCount = Math.max(0, usedNow.length - usedCount);
+  const dbg = `v${BUILD} · poll ${lastPollMs}ms · ${new Date(lastPollAt || Date.now()).toLocaleTimeString()} · deck ${remainCount}/${usedNow.length}`;
+  const errText = lastNetError ? String(lastNetError).slice(0, 140) : '';
+
   root.innerHTML = `
     <div class="board ${phase === PHASE.DEAL ? 'dealActive' : ''}">
       <div class="hud">
@@ -461,10 +477,12 @@ function renderTable(state) {
           <span class="badge">${escapeHtml(phase)}</span>
           <span class="badge">타이머 ${escapeHtml(timerText)}</span>
           <span class="badge">생존 ${aliveCount}/${players.length}</span>
+          <span class="badge">${escapeHtml(dbg)}</span>
         </div>
         <div>
           <span class="badge">연결 ${connected ? '🟢' : '🔴'}</span>
           <span class="badge">방코드 ${escapeHtml(roomCode)}</span>
+          ${errText ? `<span class="badge" style="background:rgba(239,68,68,.18);border-color:rgba(239,68,68,.35)">ERR ${escapeHtml(errText)}</span>` : ''}
         </div>
       </div>
 
@@ -496,7 +514,6 @@ function renderTable(state) {
   handleEvents(state);
 
   // 상태가 실제로 업데이트되었으면(used=true) pending도 정리
-  const usedNow = getDeckUsed(state);
   if (dealPickInFlight && usedNow[dealPickInFlight.cardIndex]) {
     pendingDealPick.delete(dealPickInFlight.cardIndex);
     dealPickInFlight = null;
@@ -530,7 +547,11 @@ async function joinRoom(code) {
   failures = 0;
   lastRenderKey = null;
 
+  const t0 = performance.now();
   const st = await getState(roomCode);
+  lastPollMs = Math.round(performance.now() - t0);
+  lastPollAt = Date.now();
+  lastNetError = null;
   if (!st) {
     alert('방 없음');
     return;
@@ -552,8 +573,12 @@ async function joinRoom(code) {
 
 async function poll() {
   try {
+    const t0 = performance.now();
     const st = await getState(roomCode);
     if (!st) throw new Error('no state');
+    lastPollMs = Math.round(performance.now() - t0);
+    lastPollAt = Date.now();
+    lastNetError = null;
 
     failures = 0;
 
@@ -566,6 +591,7 @@ async function poll() {
       renderTable(st);
     }
   } catch {
+    lastNetError = 'getState failed';
     failures++;
     if (failures >= FAIL_TO_DISCONNECT) setConnected(false);
   }

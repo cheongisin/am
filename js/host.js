@@ -10,6 +10,8 @@ import { execute } from '../src/execution.js';
 import { checkWin } from '../src/win.js';
 import { resolveNight } from './nightResolve.js';
 
+const BUILD = '2026-02-02.1';
+
 let wakeLock = null;
 async function keepAwake() {
   try { wakeLock = await navigator.wakeLock.request('screen'); } catch {}
@@ -25,6 +27,7 @@ let actionPollTimer = null;
 let actionPollInFlight = false;
 let syncInFlight = false;
 let syncQueued = false;
+let lastSyncError = null;
 
 let lastActionId = null;
 let pendingReporterReveal = null;
@@ -244,6 +247,10 @@ async function sync() {
 
   try {
     await setBothState(roomCode, { publicState: pub, privateState: priv });
+    lastSyncError = null;
+  } catch (e) {
+    lastSyncError = e?.message || String(e);
+    throw e;
   } finally {
     syncInFlight = false;
     if (syncQueued) {
@@ -350,6 +357,8 @@ function render() {
       <span class="badge">생존 ${aliveCount}/${game.players.length}</span>
       <span class="badge" id="connBadge">연결 ${connected ? '🟢' : '🔴'}</span>
       <span class="badge">방코드 ${roomCode ? `<b>${roomCode}</b>` : '-'}</span>
+      <span class="badge">v${BUILD}</span>
+      ${lastSyncError ? `<span class="badge" style="background:rgba(239,68,68,.18);border-color:rgba(239,68,68,.35)">SYNC ERR ${String(lastSyncError).slice(0,120)}</span>` : ''}
       ${game.winner ? `<span class="badge">승리: ${game.winner}</span>` : ''}
     </div>
     <div class="actions">
