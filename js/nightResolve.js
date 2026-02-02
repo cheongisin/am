@@ -71,6 +71,12 @@ export function resolveNight(state, draft){
     }
     deadSet.add(terrorist.id);
     deadSet.add(tTarget.id);
+
+    // 자폭은 양쪽 직업이 즉시 공개되어야 한다(사망 카드 반영용)
+    terrorist.publicCard = ROLE.TERRORIST;
+    // 대상은 마피아팀(MAFIA/SPY) 중 실제 직업을 공개
+    tTarget.publicCard = tTarget.role;
+
     events.push({ type: 'TERROR_SELF_DESTRUCT', terroristId: terrorist.id, targetId: tTarget.id });
   }
 

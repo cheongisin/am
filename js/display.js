@@ -289,26 +289,26 @@ function roleLabel(roleKey) {
 
 function buildEventCaption(e, state) {
   const t = String(e?.type || '');
-  if (t === 'DOCTOR_SAVE') return `${playerNameById(state, e?.targetId)}님이 의사의 치료를 받고 살아났습니다!`;
-  if (t === 'ARMY_SAVE') return `군인 ${playerNameById(state, e?.targetId)}님이 공격을 버텨냈습니다.`;
-  if (t === 'MAFIA_KILL') return `${playerNameById(state, e?.targetId)}님이 마피아에게 살해당했습니다.`;
-  if (t === 'EXECUTION') return `${playerNameById(state, e?.executedId)}님이 투표로 인해 처형 되었습니다.`;
+  if (t === 'DOCTOR_SAVE') return `"${playerNameById(state, e?.targetId)}"님이 의사의 치료를 받고 살아났습니다!`;
+  if (t === 'ARMY_SAVE') return `"군인 ${playerNameById(state, e?.targetId)}"님이 공격을 버텨냈습니다.`;
+  if (t === 'MAFIA_KILL') return `"${playerNameById(state, e?.targetId)}"님이 마피아에게 살해당했습니다.`;
+  if (t === 'EXECUTION') return `"${playerNameById(state, e?.executedId)}"님이 투표로 인해 처형 되었습니다.`;
   if (t === 'REPORTER_NEWS') {
     const who = playerNameById(state, e?.targetId);
     const rl = (e?.role != null) ? roleLabel(e.role) : null;
-    return rl ? `기자 특종! ${who}님의 직업은 ${rl}입니다.` : `특종! ${who}님의 직업이 공개되었습니다.`;
+    return rl ? `기자 특종! "${who}"님의 직업은 "${rl}"입니다.` : `특종! ${who}님의 직업이 공개되었습니다.`;
   }
   if (t === 'TERROR_SELF_DESTRUCT') {
     const a = playerNameById(state, e?.terroristId);
     const b = playerNameById(state, e?.targetId);
-    return `자폭 발생! ${a}님과 ${b}님이 함께 처형 되었습니다.`;
+    return `테러리스트 "${a}"님이 마피아 "${b}"님을 습격하였습니다.`;
   }
   if (t === 'TERROR_OXIDATION') {
     const a = playerNameById(state, e?.terroristId);
     const b = playerNameById(state, e?.targetId);
-    return `산화 발생! ${a}님이 ${b}님을 산화시켰습니다.`;
+    return `테러리스트 "${a}"님이 "${b}"님을 산화시켰습니다.`;
   }
-  if (t === 'REJECTED') return '아래에 처형될 사람을 찾지 못하였습니다. 처형이 부결되었습니다.';
+  if (t === 'REJECTED') return '처형될 사람을 찾지 못하였습니다. 처형이 부결되었습니다.';
   if (t === 'NOTHING') return '조용하게 밤이 넘어갔습니다.';
   if (t === 'LOBBY') {
     const who = playerNameById(state, e?.politicianId);
@@ -346,7 +346,8 @@ async function playEventSequence(events, state) {
   closeOverlayById('eventOverlay');
   for (const e of events) {
     if (runId !== eventRunId) return;
-    await playEventOverlay(e, state, { durationMs: EVENT_OVERLAY_MS, runId });
+    const dur = (e?.type === 'TERROR_SELF_DESTRUCT') ? 3000 : EVENT_OVERLAY_MS;
+    await playEventOverlay(e, state, { durationMs: dur, runId });
   }
 }
 
