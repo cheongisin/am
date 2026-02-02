@@ -3,7 +3,7 @@
 // ✅ GET/JSONP only (CORS/프리플라이트 회피 버전)
 
 // ✅ 너가 배포한 GAS Web App URL (…/exec)
-export const GAS_URL = "https://script.google.com/macros/s/AKfycbxk40zdkzJYrIpUwfGYFGaa1DNnkx_HspiWb4rhgm7NyQ6oJY8-uWiSEjwwHclHLN0vxg/exec";
+export const GAS_URL = "https://script.google.com/macros/s/AKfycbx4hAdB-xLWYzBjLrqc4bl0NCK1wCKY7aEVNhU3rtxf0CPedE_WIbGLbPd3m939bAjv8g/exec";
 
 function mustHaveUrl(){
   if(!GAS_URL){
