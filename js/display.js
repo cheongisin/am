@@ -1,70 +1,30 @@
-/* js/display.js
- * Display(진행 화면) 전용
- * - 사회자 좌측 고정(플레이어 아님)
- * - 나머지 플레이어 자동 분배: 위/아래 2줄 (ceil/floor)
- * - layout.css가 기대하는 구조(.board .hud .table .seat)를 사용
- * - deckUsed → deckInfo.used로 수정
- * - iOS Safari 포함 안정 렌더를 위해 "스냅샷 토큰" 기반 렌더 제한 + 클릭 pending 잠금
- */
+import { genRoomCode, getState, patchState, pushAction } from './gasApi.js';
+import { PHASE, ROLE_LABEL } from '../src/constants.js';
 
-import { GAS } from './constants.js';
-import { getState, patchState, pushAction } from './gasApi.js';
-import { PHASE } from './constants.js'; // 기존에 PHASE를 constants에서 export한다는 전제
-// 만약 PHASE가 없다면 아래 주석 해제해서 사용:
-// const PHASE = { SETUP:'SETUP', DEAL:'DEAL', NIGHT:'NIGHT', DAY:'DAY', VOTE:'VOTE', EXECUTION:'EXECUTION', END:'END' };
+let root = null;
 
-const root = document.getElementById('display');
-if (!root) throw new Error('#display root not found');
-
-let roomCode = '';
+/* =========================
+   상태 변수
+========================= */
 let connected = false;
-
+let roomCode = '';
 let pollTimer = null;
-let hbTimer = null;
-
+let beatTimer = null;
 let failures = 0;
-const FAIL_TO_DISCONNECT = 6; // 기존보다 둔감하게
+
 const POLL_MS = 800;
-const HB_MS = 2000;
+const BEAT_MS = 2000;
+const FAIL_TO_DISCONNECT = 6;
 
-// 클릭-폴링 레이스 방지용(최소 로컬 상태)
-const pendingDealPick = new Set(); // idx 저장
+// DEAL 클릭-폴링 레이스 방지(최소 로컬 상태)
+const pendingDealPick = new Set();
 
-// 렌더 재진입/과다 렌더 방지용
-let lastRenderKey = '';
+// 렌더 과다 방지 키
+let lastRenderKey = null;
 
-/* ------------------------------
- * 좌석 배치: 사회자(좌측) + 참가자(위/아래)
- * ------------------------------ */
-function seatPosPct_rows(n, i) {
-  // 위 = ceil(n/2), 아래 = floor(n/2)
-  const topCount = Math.ceil(n / 2);
-  const bottomCount = n - topCount;
-
-  const isTop = i < topCount;
-  const idx = isTop ? i : (i - topCount);
-  const cnt = isTop ? topCount : bottomCount;
-
-  // 오른쪽 영역에만 배치
-  const xStart = 28; // 좌측 여백(사회자 영역 비우기)
-  const xEnd = 96;
-
-  // 위/아래 y
-  const yTop = 28;
-  const yBottom = 72;
-
-  const x = (cnt <= 1)
-    ? (xStart + xEnd) / 2
-    : (xStart + (xEnd - xStart) * (idx / (cnt - 1)));
-
-  const y = isTop ? yTop : yBottom;
-
-  return { x, y };
-}
-
-/* ------------------------------
- * 유틸
- * ------------------------------ */
+/* =========================
+   유틸
+========================= */
 function escapeHtml(s) {
   return String(s ?? '')
     .replaceAll('&', '&amp;')
@@ -74,56 +34,118 @@ function escapeHtml(s) {
     .replaceAll("'", '&#39;');
 }
 
+function setConnected(v) {
+  connected = !!v;
+}
+
 function getDeckUsed(state) {
-  // 공개 상태 기준: deckInfo.used
   const used = state?.deckInfo?.used;
   return Array.isArray(used) ? used : [];
 }
 
-function computeRenderKey(state) {
-  // eventQueue.token에만 묶지 말고, phase + deckUsed + timer + players의 핵심만 섞어서 키 생성
-  const phase = state?.phase ?? '';
-  const night = state?.night ?? '';
-  const endAt = state?.timer?.endAt ?? '';
-  const timerMode = state?.timer?.mode ?? '';
-  const alive = (state?.players || []).map(p => (p?.alive === false ? '0' : '1')).join('');
-  const pub = (state?.players || []).map(p => (p?.publicCard || '')).join('|');
-  const used = getDeckUsed(state).map(v => (v ? '1' : '0')).join('');
-  return `${phase}|${night}|${timerMode}|${endAt}|${alive}|${pub}|${used}`;
+function computeRenderKey(st) {
+  const phase = st?.phase ?? '';
+  const hb = st?.hostHeartbeat ?? '';
+  const endAt = st?.timer?.endAt ?? '';
+  const mode = st?.timer?.mode ?? '';
+  const alive = (st?.players || []).map(p => (p?.alive === false ? '0' : '1')).join('');
+  const pub = (st?.players || []).map(p => (p?.publicCard || '')).join('|');
+  const used = getDeckUsed(st).map(v => (v ? '1' : '0')).join('');
+  // eventQueue에만 묶지 않음 (phase/timer/players/deck 사용 포함)
+  return `${phase}|${hb}|${mode}|${endAt}|${alive}|${pub}|${used}`;
 }
 
-function formatTimerText(timer) {
-  if (!timer) return '--:--';
-  if (timer.mode === 'INFINITE') return '∞';
-  if (timer.mode === 'COUNTDOWN') {
-    const endAt = timer.running ? timer.endAt : null;
-    const sec = endAt
-      ? Math.max(0, Math.ceil((endAt - Date.now()) / 1000))
-      : Number(timer.durationSec || 0);
-    const mm = String(Math.floor(sec / 60)).padStart(2, '0');
-    const ss = String(sec % 60).padStart(2, '0');
-    return `${mm}:${ss}`;
+/* =========================
+   치명 에러 표시
+========================= */
+function showFatal(err) {
+  try {
+    const msg = err?.stack || err?.message || String(err);
+    if (root) {
+      root.innerHTML = `
+        <div style="padding:16px">
+          <h2>display.js 오류</h2>
+          <pre style="white-space:pre-wrap">${escapeHtml(msg)}</pre>
+          <button onclick="location.reload()">새로고침</button>
+        </div>
+      `;
+    } else {
+      alert(msg);
+    }
+  } catch (e) {
+    alert(String(err));
   }
-  return '--:--';
 }
 
-/* ------------------------------
- * DEAL UI
- * ------------------------------ */
+window.addEventListener('error', e => showFatal(e.error || e.message));
+window.addEventListener('unhandledrejection', e => showFatal(e.reason));
+
+/* =========================
+   좌석 배치 (사회자 좌측 + 플레이어 위/아래 자동분배)
+   - 사회자: left 10%, top 50%
+   - 플레이어: 오른쪽 영역 x 28~96, 위(y=28)/아래(y=72)
+========================= */
+function seatPosRows(n, i) {
+  const topCount = Math.ceil(n / 2);
+  const bottomCount = n - topCount;
+
+  const isTop = i < topCount;
+  const idx = isTop ? i : (i - topCount);
+  const cnt = isTop ? topCount : bottomCount;
+
+  const xStart = 28;
+  const xEnd = 96;
+  const yTop = 28;
+  const yBottom = 72;
+
+  const x = (cnt <= 1)
+    ? (xStart + xEnd) / 2
+    : (xStart + (xEnd - xStart) * (idx / (cnt - 1)));
+
+  const y = isTop ? yTop : yBottom;
+  return { x, y };
+}
+
+/* =========================
+   연결 전 화면
+========================= */
+function renderDisconnected() {
+  root.innerHTML = `
+    <div class="display-wrap">
+      <div class="panel">
+        <h3>진행자 연결</h3>
+        <div class="row">
+          <input id="roomInput" placeholder="4자리 코드" inputmode="numeric" />
+          <button id="joinBtn" class="primary">접속</button>
+        </div>
+        <div class="muted">상태: ${connected ? '🟢' : '🔴'}</div>
+      </div>
+    </div>
+  `;
+
+  document.getElementById('joinBtn').onclick = () => {
+    const code = document.getElementById('roomInput').value.trim();
+    joinRoom(code);
+  };
+}
+
+/* =========================
+   DEAL 패널
+========================= */
 function renderDealPanel(state) {
   const used = getDeckUsed(state);
   const remain = used.filter(v => !v).length;
 
   return `
-    <div class="dealwrap">
+    <div class="deal-panel">
       <h3>직업 배정 (남은 카드 ${remain})</h3>
-      <div class="deck">
+      <div class="deal-grid">
         ${used.map((u, i) => {
           const pending = pendingDealPick.has(i);
           const disabled = u || pending;
           return `
-            <button class="cardbtn ${u ? 'used' : ''}" data-idx="${i}" ${disabled ? 'disabled' : ''}>
-              <img src="assets/cards/back.png" alt="">
+            <button class="deal-card" data-idx="${i}" ${disabled ? 'disabled' : ''}>
+              ${u ? '사용됨' : (pending ? '전송중...' : `카드 ${i + 1}`)}
             </button>
           `;
         }).join('')}
@@ -132,49 +154,70 @@ function renderDealPanel(state) {
   `;
 }
 
+function guessNextPlayer(state) {
+  const p = state.players.find(x => x.assigned === false);
+  return p ? p.id : 0;
+}
+
 function wireDeal(state) {
   const used = getDeckUsed(state);
-  const buttons = root.querySelectorAll('.cardbtn');
-  buttons.forEach(btn => {
+
+  document.querySelectorAll('.deal-card').forEach(btn => {
     btn.onclick = async () => {
       const idx = Number(btn.dataset.idx);
       if (!Number.isFinite(idx)) return;
-      if (used[idx]) return; // 이미 사용됨
+      if (used[idx]) return;
       if (pendingDealPick.has(idx)) return;
 
-      // 즉시 잠금(렌더 교체/폴링에도 유지)
       pendingDealPick.add(idx);
       btn.disabled = true;
 
       try {
         await pushAction(roomCode, {
           type: 'DEAL_PICK',
-          idx
-          // playerId/seat 지정 로직이 기존에 있다면 여기 포함해야 함
-          // 현재 구조상 "다음 플레이어"는 Host가 관리하므로 display는 idx만 보내는 형태를 유지
+          cardIndex: idx,
+          playerId: guessNextPlayer(state)
         });
-      } catch (e) {
-        // 실패 시 잠금 해제(다음 렌더에서 살아남게)
+      } catch {
         pendingDealPick.delete(idx);
         btn.disabled = false;
+        alert('전송 실패');
       }
     };
   });
 }
 
-/* ------------------------------
- * 렌더
- * ------------------------------ */
-function render(state) {
+/* =========================
+   메인 테이블 렌더 (layout.css 기준 구조)
+========================= */
+function renderTable(state) {
   const players = Array.isArray(state?.players) ? state.players : [];
   const phase = state?.phase || PHASE.SETUP;
-  const timerText = formatTimerText(state?.timer);
+  const timer = state?.timer || {};
 
   const aliveCount = players.filter(p => p?.alive !== false).length;
 
+  const timerText = (() => {
+    if (timer.mode === 'INFINITE') return '∞';
+    if (timer.mode === 'COUNTDOWN') {
+      const endAt = timer.running ? timer.endAt : null;
+      const sec = endAt
+        ? Math.max(0, Math.ceil((endAt - Date.now()) / 1000))
+        : Number(timer.durationSec || 0);
+      return `${String(Math.floor(sec / 60)).padStart(2,'0')}:${String(sec % 60).padStart(2,'0')}`;
+    }
+    return '--:--';
+  })();
+
   const seatHtml = players.map((p, i) => {
     const dead = p?.alive === false;
-    const { x, y } = seatPosPct_rows(players.length, i);
+
+    const label =
+      p?.publicCard && p.publicCard !== 'CITIZEN'
+        ? (ROLE_LABEL[p.publicCard] || p.publicCard)
+        : 'CITIZEN';
+
+    const { x, y } = seatPosRows(players.length, i);
 
     return `
       <div class="seat ${dead ? 'dead' : ''}" style="left:${x}%; top:${y}%;">
@@ -217,108 +260,69 @@ function render(state) {
   `;
 
   if (phase === PHASE.DEAL) wireDeal(state);
-
-  // DEAL이 끝나면 pending 잠금은 의미가 없으니 정리
-  if (phase !== PHASE.DEAL) pendingDealPick.clear();
+  else pendingDealPick.clear();
 }
 
-/* ------------------------------
- * 연결/폴링
- * ------------------------------ */
-async function poll() {
-  if (!roomCode) return;
+/* =========================
+   네트워크
+========================= */
+async function joinRoom(code) {
+  if (!/^\d{4}$/.test(code)) {
+    alert('4자리 코드');
+    return;
+  }
 
+  roomCode = code;
+  failures = 0;
+  lastRenderKey = null;
+
+  const st = await getState(roomCode);
+  if (!st) {
+    alert('방 없음');
+    return;
+  }
+
+  if (beatTimer) clearInterval(beatTimer);
+  beatTimer = setInterval(() => {
+    patchState(roomCode, { clientHeartbeat: Date.now() }).catch(()=>{});
+  }, BEAT_MS);
+
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(poll, POLL_MS);
+
+  setConnected(true);
+  renderTable(st);
+}
+
+async function poll() {
   try {
     const st = await getState(roomCode);
-    if (!st) throw new Error('empty state');
+    if (!st) throw new Error('no state');
 
-    // 연결 판정(hostHeartbeat 기반)
-    const hb = st.hostHeartbeat || 0;
-    const age = Date.now() - hb;
-    const ok = Number.isFinite(hb) && age < (HB_MS * FAIL_TO_DISCONNECT);
+    failures = 0;
 
-    if (ok) {
-      failures = 0;
-      connected = true;
-    } else {
-      failures++;
-      if (failures >= FAIL_TO_DISCONNECT) connected = false;
-    }
+    const hb = Number(st.hostHeartbeat || 0);
+    setConnected(hb && Date.now() - hb < 30000);
 
-    // 렌더 제한(상태가 실질적으로 변할 때만)
     const key = computeRenderKey(st);
     if (key !== lastRenderKey) {
       lastRenderKey = key;
-      render(st);
-    } else {
-      // 타이머만 움직이는 경우도 있으니 HUD 타이머는 필요하면 갱신
-      // (현재는 key에 endAt 포함되어 COUNTDOWN이면 자연히 갱신됨)
+      renderTable(st);
     }
-  } catch (e) {
+  } catch {
     failures++;
-    if (failures >= FAIL_TO_DISCONNECT) connected = false;
-    // 네트워크 실패 시에도 HUD 정도는 갱신되도록 최소 렌더(옵션)
-    // 여기서는 그대로 둠
+    if (failures >= FAIL_TO_DISCONNECT) setConnected(false);
   }
 }
 
-async function heartbeat() {
-  if (!roomCode) return;
-  try {
-    await patchState(roomCode, { clientHeartbeat: Date.now() });
-  } catch (e) {
-    // 무시
-  }
-}
-
-/* ------------------------------
- * 부팅/입장
- * ------------------------------ */
-function getRoomCodeFromUrlOrPrompt() {
-  // 1) URL ?room=1234
-  const params = new URLSearchParams(location.search);
-  const r = params.get('room');
-  if (r && /^[0-9]{4}$/.test(r)) return r;
-
-  // 2) localStorage
-  const saved = localStorage.getItem('roomCode');
-  if (saved && /^[0-9]{4}$/.test(saved)) return saved;
-
-  // 3) prompt
-  const input = prompt('방코드(4자리)를 입력하세요');
-  if (input && /^[0-9]{4}$/.test(input.trim())) return input.trim();
-  return '';
-}
-
-async function main() {
-  roomCode = getRoomCodeFromUrlOrPrompt();
-  if (!roomCode) {
-    root.innerHTML = `<div style="padding:16px">방코드가 필요합니다.</div>`;
+/* =========================
+   시작 (DOM 보장)
+========================= */
+document.addEventListener('DOMContentLoaded', () => {
+  root = document.getElementById('display');
+  if (!root) {
+    alert('#display 엘리먼트를 찾을 수 없습니다.');
     return;
   }
-  localStorage.setItem('roomCode', roomCode);
-
-  // 초기 상태 로딩
-  try {
-    const st = await getState(roomCode);
-    if (!st) throw new Error('state not found');
-    lastRenderKey = ''; // 강제 렌더
-    render(st);
-  } catch (e) {
-    root.innerHTML = `<div style="padding:16px">상태를 불러오지 못했습니다. 방코드를 확인하세요.</div>`;
-    return;
-  }
-
-  // 루프 시작
-  if (pollTimer) clearInterval(pollTimer);
-  if (hbTimer) clearInterval(hbTimer);
-
-  pollTimer = setInterval(poll, POLL_MS);
-  hbTimer = setInterval(heartbeat, HB_MS);
-
-  // 즉시 한 번 더
-  heartbeat();
-  poll();
-}
-
-document.addEventListener('DOMContentLoaded', main);
+  renderDisconnected();
+});
