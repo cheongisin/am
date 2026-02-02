@@ -1,5 +1,5 @@
 import { genRoomCode, getState, pushAction, pullActions, dealPick } from './gasApi.js';
-import { PHASE, CARD, ROLE_LABEL } from '../src/constants.js';
+import { PHASE, CARD, DEAD_CARD, ROLE_LABEL, EVENT_IMG } from '../src/constants.js';
 
 const BUILD = '2026-02-02.1';
 
@@ -20,6 +20,7 @@ let lastKnownState = null;
 let lastNetError = null;
 let lastPollAt = 0;
 let lastPollMs = 0;
+let eventRunId = 0;
 
 const POLL_MS = 1200;
 const PING_MS = 6000;
@@ -101,8 +102,34 @@ window.addEventListener('unhandledrejection', e => showFatal(e.reason));
 function renderSeat(p, fallbackIndex) {
   const dead = p?.alive === false;
   const name = escapeHtml(p?.name || `P${(fallbackIndex ?? 0) + 1}`);
-  const pub = String(p?.publicCard || 'CITIZEN');
-  const img = CARD[pub] || CARD.CITIZEN;
+
+  // 카드 선택 규칙
+  // - 게임 종료(winner 존재): 전원 직업 공개
+  //   - 사망: assets/cards/dead/<직업>.png
+  //   - 생존: assets/cards/<직업>.png
+  // - 게임 진행 중:
+  //   - 생존: publicCard(기본 시민)
+  //   - 사망: 기본 dead/citizen
+  //     - 단, 기자로 공개된 적(journalistReveals 포함)이 있으면 dead/<공개된 직업>
+  const gameOver = !!(lastKnownState?.winner || (p && p.role));
+  const journalistReveals = Array.isArray(lastKnownState?.journalistReveals) ? lastKnownState.journalistReveals : [];
+  const pid = Number(p?.id);
+  const wasRevealed = Number.isFinite(pid) && journalistReveals.includes(pid);
+
+  let roleKey = 'CITIZEN';
+  if (gameOver) {
+    roleKey = String(p?.role || p?.publicCard || 'CITIZEN');
+  } else if (dead) {
+    const pub = String(p?.publicCard || 'CITIZEN');
+    // 공개 카드가 시민이 아니면(군인 방어/정치인 로비/기자 특종 등) 사망 후에도 유지
+    roleKey = (pub && pub !== 'CITIZEN') ? pub : (wasRevealed ? pub : 'CITIZEN');
+  } else {
+    roleKey = String(p?.publicCard || 'CITIZEN');
+  }
+
+  const img = dead
+    ? (DEAD_CARD?.[roleKey] || DEAD_CARD?.CITIZEN || CARD.CITIZEN)
+    : (CARD?.[roleKey] || CARD.CITIZEN);
   return `
     <div class="seat ${dead ? 'dead' : ''}">
       <div class="imgwrap">
@@ -127,10 +154,16 @@ function getTimerRemaining(timer) {
 }
 
 function phaseLabel(st) {
-  if (st?.winner === 'MAFIA') return 'MAFIA WIN';
-  if (st?.winner === 'CITIZEN') return 'CITIZEN WIN';
+  if (st?.winner === 'MAFIA') return '마피아 팀 승리';
+  if (st?.winner === 'CITIZEN') return '시민 팀 승리';
   const p = st?.phase || PHASE.SETUP;
-  if (p === PHASE.SETUP) return 'GAME SET';
+  if (p === PHASE.DAY) return '낮';
+  if (p === PHASE.NIGHT) return '저녁';
+  if (p === PHASE.VOTE) return '투표 시간';
+  if (p === PHASE.EXECUTION) return '최후 변론';
+  if (p === PHASE.SETUP) return '게임 준비';
+  if (p === PHASE.DEAL) return '카드 분배';
+  if (p === PHASE.END) return '게임 종료';
   return String(p);
 }
 
@@ -228,6 +261,85 @@ function ensureOverlayRoot() {
   el.id = 'overlayRoot';
   document.body.appendChild(el);
   return el;
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function playerNameById(state, id) {
+  const players = Array.isArray(state?.players) ? state.players : [];
+  const pid = Number(id);
+  const p = Number.isFinite(pid) ? players[pid] : null;
+  return p?.name || (Number.isFinite(pid) ? `P${pid + 1}` : '-');
+}
+
+function roleLabel(roleKey) {
+  const k = String(roleKey || '');
+  return ROLE_LABEL?.[k] || k || '-';
+}
+
+function buildEventCaption(e, state) {
+  const t = String(e?.type || '');
+  if (t === 'DOCTOR_SAVE') return `${playerNameById(state, e?.targetId)}님이 의사의 치료를 받고 살아났습니다!`;
+  if (t === 'ARMY_SAVE') return `군인 ${playerNameById(state, e?.targetId)}님이 공격을 버텨냈습니다.`;
+  if (t === 'MAFIA_KILL') return `${playerNameById(state, e?.targetId)}님이 마피아에게 살해당했습니다.`;
+  if (t === 'EXECUTION') return `${playerNameById(state, e?.executedId)}님이 투표로 인해 처형 되었습니다.`;
+  if (t === 'REPORTER_NEWS') {
+    const who = playerNameById(state, e?.targetId);
+    const rl = (e?.role != null) ? roleLabel(e.role) : null;
+    return rl ? `기자 특종! ${who}님의 직업은 ${rl}입니다.` : `특종! ${who}님의 직업이 공개되었습니다.`;
+  }
+  if (t === 'TERROR_SELF_DESTRUCT') {
+    const a = playerNameById(state, e?.terroristId);
+    const b = playerNameById(state, e?.targetId);
+    return `자폭 발생! ${a}님과 ${b}님이 함께 처형 되었습니다.`;
+  }
+  if (t === 'TERROR_OXIDATION') {
+    const a = playerNameById(state, e?.terroristId);
+    const b = playerNameById(state, e?.targetId);
+    return `산화 발생! ${a}님이 ${b}님을 산화시켰습니다.`;
+  }
+  if (t === 'REJECTED') return '아래에 처형될 사람을 찾지 못하였습니다. 처형이 부결되었습니다.';
+  if (t === 'NOTHING') return '조용하게 밤이 넘어갔습니다.';
+  if (t === 'LOBBY') {
+    const who = playerNameById(state, e?.politicianId);
+    return `정치인은 투표로 인해 처형 당하지 않습니다.`;
+  }
+  return t;
+}
+
+async function playEventOverlay(e, state, { durationMs = 3000, runId } = {}) {
+  if (runId !== eventRunId) return;
+
+  const img = EVENT_IMG?.[String(e?.type || '')] || null;
+  if (!img) return;
+
+  const overlayRoot = ensureOverlayRoot();
+  closeOverlayById('eventOverlay');
+
+  const caption = buildEventCaption(e, state);
+  const el = document.createElement('div');
+  el.id = 'eventOverlay';
+  el.className = 'event-overlay';
+  el.innerHTML = `
+    <img class="event-img" src="${img}" alt="">
+    <div class="event-caption">${escapeHtml(caption)}</div>
+  `;
+  overlayRoot.appendChild(el);
+
+  await sleep(durationMs);
+  if (runId !== eventRunId) return;
+  closeOverlayById('eventOverlay');
+}
+
+async function playEventSequence(events, state) {
+  const runId = ++eventRunId;
+  closeOverlayById('eventOverlay');
+  for (const e of events) {
+    if (runId !== eventRunId) return;
+    await playEventOverlay(e, state, { durationMs: 3000, runId });
+  }
 }
 
 function closeOverlayById(id) {
@@ -406,6 +518,12 @@ function handleEvents(state) {
     if (Number.isFinite(deal.cardIndex)) pendingDealPick.delete(Number(deal.cardIndex));
     dealPickInFlight = null;
     dealPickStatus = null;
+  }
+
+  const normalEvents = events.filter(e => e?.type && e.type !== 'DEAL_REVEAL');
+  if (normalEvents.length) {
+    // 기존 재생을 취소하고 새 토큰 이벤트를 재생
+    playEventSequence(normalEvents, state).catch(() => {});
   }
 }
 

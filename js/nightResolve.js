@@ -24,45 +24,54 @@ export function resolveNight(state, draft){
     if (t) t.terroristTarget = terroristTargetId ?? null;
   }
 
-  // 1) 마피아 공격 처리
-  let mafiaVictim = mafiaTargetId != null ? byId(mafiaTargetId) : null;
+  // 1) 마피아 공격 처리 (우선순위: 의사 > 군인 > 킬)
+  // - 의사 보호와 군인 방어가 겹치면(군인이면서 의사 보호) ARMY_SAVE는 발동하지 않는다.
+  let mafiaOutcome = 'NONE'; // 'NONE' | 'DOCTOR_SAVE' | 'ARMY_SAVE' | 'MAFIA_KILL'
+  const mafiaVictim = mafiaTargetId != null ? byId(mafiaTargetId) : null;
 
   if (alive(mafiaVictim)) {
     const victimId = mafiaVictim.id;
-
-    // 의사 보호 성공
     if (doctorTargetId != null && doctorTargetId === victimId) {
+      mafiaOutcome = 'DOCTOR_SAVE';
       events.push({ type: 'DOCTOR_SAVE', targetId: victimId });
+    } else if (mafiaVictim.role === ROLE.ARMY && !mafiaVictim.armorUsed) {
+      mafiaVictim.armorUsed = true;
+      // 방어 성공은 군인임이 공개되며 이후에도 유지
+      mafiaVictim.publicCard = ROLE.ARMY;
+      mafiaOutcome = 'ARMY_SAVE';
+      events.push({ type: 'ARMY_SAVE', targetId: victimId });
     } else {
-      // 군인(ARMY) 1회 방어(armorUsed) 처리
-      if (mafiaVictim.role === ROLE.ARMY && !mafiaVictim.armorUsed) {
-        mafiaVictim.armorUsed = true;
-        events.push({ type: 'ARMY_SAVE', targetId: victimId });
-      } else {
-        deadSet.add(victimId);
-        events.push({ type: 'MAFIA_KILL', targetId: victimId });
-      }
+      mafiaOutcome = 'MAFIA_KILL';
+      deadSet.add(victimId);
+      events.push({ type: 'MAFIA_KILL', targetId: victimId });
     }
   }
 
-  // 2) 테러리스트가 이번 밤에 죽었으면 연쇄 살인(지목 대상)
-  // - “테러리스트가 죽는 경우”는 일단 마피아에게 죽었을 때로 처리
-  // - (다른 사유로 죽는 로직이 있으면 deadSet에 테러리스트 id가 추가되면 동일하게 작동)
+  // 2) 테러리스트 Self-destruct(자폭, 상호 선택)
+  // - 조건(강화):
+  //   (a) 테러리스트가 밤에 마피아팀(MAFIA+SPY)을 지목했고
+  //   (b) 마피아 공격 대상이 테러리스트인 경우(서로 선택)
+  // - 우선순위: DOCTOR_SAVE / ARMY_SAVE 이후에만 고려하며,
+  //   발동 시 MAFIA_KILL 연출 대신 자폭 연출을 사용한다.
   const terrorist = state.players?.find(p => p.role === ROLE.TERRORIST) ?? null;
-  const terroristDiesTonight = terrorist && deadSet.has(terrorist.id);
+  const terroristAlive = alive(terrorist);
+  const tTargetId = terroristTargetId != null ? terroristTargetId : (terrorist?.terroristTarget ?? null);
+  const tTarget = tTargetId != null ? byId(tTargetId) : null;
+  const isMafiaTeam = (pp) => !!pp && (pp.role === ROLE.MAFIA || pp.role === ROLE.SPY);
 
-  if (terroristDiesTonight) {
-    const targetId = terrorist.terroristTarget ?? null;
-    const target = targetId != null ? byId(targetId) : null;
-
-    if (alive(target) && !deadSet.has(target.id)) {
-      deadSet.add(target.id);
-      events.push({
-        type: 'TERROR_CHAIN',
-        terroristId: terrorist.id,
-        targetId: target.id
-      });
+  const mafiaPickedTerrorist = (mafiaVictim?.id != null && terrorist?.id != null && mafiaVictim.id === terrorist.id);
+  const canConsiderSelfDestruct = (mafiaOutcome !== 'DOCTOR_SAVE' && mafiaOutcome !== 'ARMY_SAVE');
+  if (canConsiderSelfDestruct && terroristAlive && mafiaPickedTerrorist && alive(tTarget) && isMafiaTeam(tTarget)) {
+    // 기존 MAFIA_KILL 연출은 제거하고 자폭 연출로 대체
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i]?.type === 'MAFIA_KILL' && Number(events[i]?.targetId) === Number(terrorist.id)) {
+        events.splice(i, 1);
+        break;
+      }
     }
+    deadSet.add(terrorist.id);
+    deadSet.add(tTarget.id);
+    events.push({ type: 'TERROR_SELF_DESTRUCT', terroristId: terrorist.id, targetId: tTarget.id });
   }
 
   // 3) 기자(특보) 공개 예약값 반환
@@ -72,6 +81,18 @@ export function resolveNight(state, draft){
     reporterRevealTarget = Number(draft.reporterTarget);
     // 사용 처리(중복 방지)
     state.reporterUsedOnce = true;
+  }
+
+  // 4) 기자 특종(연출용 이벤트는 항상 맨 마지막)
+  if (reporterRevealTarget != null) {
+    const target = byId(reporterRevealTarget);
+    const role = target?.role ?? null;
+    events.push({ type: 'REPORTER_NEWS', targetId: reporterRevealTarget, role });
+  }
+
+  // 5) 아무 일도 없음
+  if (events.length === 0) {
+    events.push({ type: 'NOTHING' });
   }
 
   return {

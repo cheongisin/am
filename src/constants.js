@@ -44,7 +44,7 @@ export const CARD = {
   DOCTOR:'assets/cards/doctor.png',
   SOLDIER:'assets/cards/army.png',
   REPORTER:'assets/cards/reporter.png',
-  POLITICIAN:'assets/cards/citizen.png',
+  POLITICIAN:'assets/cards/politician.png',
   DETECTIVE:'assets/cards/detective.png',
   SPY:'assets/cards/spy.png',
   TERRORIST:'assets/cards/terrorist.png',
@@ -53,14 +53,15 @@ export const CARD = {
 
 export const EVENT_IMG = {
   DOCTOR_SAVE:'assets/events/doctor_save.png',
-  ARMY_SAVE:'assets/events/army.png',
+  ARMY_SAVE:'assets/events/army_save.png',
   MAFIA_KILL:'assets/events/mafia_kill.png',
-  SPECIAL_KILL:'assets/events/special_kill.png',
   REPORTER_NEWS:'assets/events/reporter_news.png',
-  VOTE:'assets/events/vote.png',
   EXECUTION:'assets/events/execution.png',
-  TERROR_CHAIN:'assets/events/terror_chain.png',
-  DAY:'assets/events/day.png'
+  REJECTED:'assets/events/rejected.png',
+  NOTHING:'assets/events/nothing.png',
+  LOBBY:'assets/events/lobby.png',
+  TERROR_SELF_DESTRUCT:'assets/events/self-destruct.png',
+  TERROR_OXIDATION:'assets/events/oxidation.png',
 };
 
 export const DEAD_CARD = {

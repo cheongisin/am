@@ -14,12 +14,14 @@ export function createGame(players){
       alive: true,
       assigned: false,
       armorUsed: false,
+      lobbyUsed: false,
       terroristTarget: null
     })),
     deck: null,
     deckUsed: null,
     votes: {},
     executionTarget: null,
+    executionOxidationTarget: null,
     journalistReveals: [],
     reporterUsedOnce: false,
     // 출력(태블릿) 연출용 이벤트 큐
@@ -40,6 +42,7 @@ export function snapshot(state){
     deckUsed: state.deckUsed,
     votes: state.votes,
     executionTarget: state.executionTarget,
+    executionOxidationTarget: state.executionOxidationTarget,
     journalistReveals: state.journalistReveals,
     reporterUsedOnce: state.reporterUsedOnce,
     eventQueue: state.eventQueue,

@@ -6,9 +6,5 @@ export function execute(state, targetId){
   t.alive=false;
   const executed=[t.id];
   const chain=[];
-  if(t.role===ROLE.TERRORIST && t.terroristTarget!=null){
-    const x = state.players.find(p=>p.id===t.terroristTarget);
-    if(x && x.alive){ x.alive=false; chain.push(x.id); }
-  }
   return {executed, chain};
 }

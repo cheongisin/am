@@ -114,6 +114,24 @@ function rolePoolFor(n) {
   return pool.slice(0, n);
 }
 
+function phaseText(phase) {
+  const p = phase || PHASE.SETUP;
+  if (p === PHASE.DAY) return '낮';
+  if (p === PHASE.NIGHT) return '저녁';
+  if (p === PHASE.VOTE) return '투표 시간';
+  if (p === PHASE.EXECUTION) return '최후 변론';
+  if (p === PHASE.SETUP) return '게임 준비';
+  if (p === PHASE.DEAL) return '카드 분배';
+  if (p === PHASE.END) return '게임 종료';
+  return String(p);
+}
+
+function winnerText(winner) {
+  if (winner === 'MAFIA') return '마피아 팀 승리';
+  if (winner === 'CITIZEN') return '시민 팀 승리';
+  return null;
+}
+
 const DECK_ROLE_ORDER = [
   ROLE.MAFIA,
   ROLE.SPY,
@@ -252,6 +270,7 @@ async function sync() {
     deckUsed: game.deckUsed,
     votes: game.votes,
     executionTarget: game.executionTarget,
+    executionOxidationTarget: game.executionOxidationTarget,
     journalistReveals: game.journalistReveals,
     reporterUsedOnce: game.reporterUsedOnce,
     eventQueue: game.eventQueue,
@@ -327,6 +346,7 @@ function applyPrivateStateToGame(priv) {
   game.deckUsed = Array.isArray(priv.deckUsed) ? priv.deckUsed : game.deckUsed;
   game.votes = priv.votes ?? game.votes;
   game.executionTarget = priv.executionTarget ?? game.executionTarget;
+  game.executionOxidationTarget = priv.executionOxidationTarget ?? game.executionOxidationTarget;
   game.journalistReveals = Array.isArray(priv.journalistReveals) ? priv.journalistReveals : game.journalistReveals;
   game.reporterUsedOnce = !!priv.reporterUsedOnce;
   game.eventQueue = priv.eventQueue ?? game.eventQueue;
@@ -419,7 +439,7 @@ function render() {
   app.innerHTML = `
   <div class="topbar"><div class="topbar-inner">
     <div class="actions">
-      <span class="badge night">${game.phase} ${game.phase === PHASE.NIGHT ? `N${game.night}` : ''}</span>
+      <span class="badge night">${phaseText(game.phase)} ${game.phase === PHASE.NIGHT ? `N${game.night}` : ''}</span>
       <span class="badge">타이머 ${timerText}</span>
       <span class="badge">생존 ${aliveCount}/${game.players.length}</span>
       <span class="badge" id="connBadge">서버 ${connected ? '🟢' : '🔴'} / 진행자 ${clientSeen ? '🟢' : '🔴'}</span>
@@ -427,7 +447,7 @@ function render() {
       <span class="badge">v${BUILD}</span>
       ${testMode ? `<span class="badge" style="background:rgba(251,191,36,.14);border-color:rgba(251,191,36,.35)">TEST</span>` : ''}
       ${lastSyncError ? `<span class="badge" style="background:rgba(239,68,68,.18);border-color:rgba(239,68,68,.35)">SYNC ERR ${String(lastSyncError).slice(0,120)}</span>` : ''}
-      ${game.winner ? `<span class="badge">승리: ${game.winner}</span>` : ''}
+      ${winnerText(game.winner) ? `<span class="badge">${winnerText(game.winner)}</span>` : ''}
     </div>
     <div class="actions">
       <button id="undoBtn" ${game.history.length ? '' : 'disabled'}>되돌리기</button>
@@ -759,10 +779,13 @@ function buildPhasePanel() {
   if (game.phase === PHASE.EXECUTION) {
     const t = game.executionTarget;
     const name = (t == null) ? '무효(처형 없음)' : (game.players.find(p => p.id == t)?.name ?? '-');
+    const target = (t == null) ? null : (game.players.find(p => p.id == t) ?? null);
+    const isPolitician = !!target && target.alive && target.role === ROLE.POLITICIAN;
+    const primaryLabel = isPolitician ? '로비 발동' : '처형 확정';
     return `
       <p class="muted">투표 진행 중: <b>${name}</b></p>
       <div class="actions">
-        <button class="primary" id="execConfirm" ${disabled}>처형 확정</button>
+        <button class="primary" id="execConfirm" ${disabled}>${primaryLabel}</button>
         <button id="execCancel" ${disabled}>무효 → 밤으로</button>
       </div>`;
   }
@@ -837,8 +860,14 @@ function wireControlPanel() {
       const res = resolveNight(game, nightDraft);
 
       res.dead.forEach(id => { if (game.players[id]) game.players[id].alive = false; });
+
+      // 기자 특종 공개는 즉시 반영(추가 write 액션 없이 상태 동기화)
+      if (res.reporterRevealTarget != null) {
+        journalistReveal(game, res.reporterRevealTarget);
+        pendingReporterReveal = null;
+      }
       game.eventQueue = { token: Date.now(), events: res.events || [] };
-      pendingReporterReveal = res.reporterRevealTarget;
+      // (구버전 호환) pendingReporterReveal는 더 이상 사용하지 않음
 
       game.phase = PHASE.DAY;
       if (game.timerConfig?.daySec) startCountdown(game.timerConfig.daySec, { record: false });
@@ -910,27 +939,54 @@ function wireControlPanel() {
   }
 
   if (game.phase === PHASE.EXECUTION) {
+    const oxSel = app.querySelector('#oxidationSel');
+    if (oxSel) {
+      oxSel.onchange = () => {
+        snapshot(game);
+        game.executionOxidationTarget = (oxSel.value === '' ? null : Number(oxSel.value));
+        render();
+      };
+    }
+
     app.querySelector('#execConfirm').onclick = async () => {
-      const ok = await modalConfirm('처형 확정', '처형을 확정할까요? (되돌리기 가능)');
+      const t = game.executionTarget;
+      const target = (t == null) ? null : (game.players.find(p => p.id == t) ?? null);
+      const isPolitician = !!target && target.alive && target.role === ROLE.POLITICIAN;
+
+      const ok = await modalConfirm(
+        isPolitician ? '정치인 로비' : '처형 확정',
+        isPolitician ? '정치인 로비가 발동됩니다. (처형 무효)' : '처형을 확정할까요? (되돌리기 가능)'
+      );
       if (!ok) return;
 
       snapshot(game);
-      let result = { executed: [], chain: [] };
-      if (game.executionTarget != null) result = execute(game, game.executionTarget);
+      // 정치인: 투표 처형 무시 능력은 제한 없이 항상 발동
+      if (isPolitician) {
+        target.publicCard = ROLE.POLITICIAN;
+        game.eventQueue = { token: Date.now(), events: [{ type: 'LOBBY', politicianId: target.id }] };
+      } else {
+        if (game.executionTarget != null) execute(game, game.executionTarget);
 
-      const executedId = game.executionTarget;
-      const executedPlayer = executedId != null ? game.players[executedId] : null;
+        const executedId = game.executionTarget;
+        const executedPlayer = executedId != null ? game.players[executedId] : null;
 
-      const evs = [{ type: 'EXECUTION', executedId }];
-      if (executedPlayer?.role === ROLE.TERRORIST) {
-        evs[0].terroristId = executedId;
-        evs[0].executorName = '처형자';
+        const evs = [{ type: 'EXECUTION', executedId }];
+        if (executedPlayer?.role === ROLE.TERRORIST) {
+          const oxTargetId = game.executionOxidationTarget;
+          const oxTarget = (oxTargetId != null) ? game.players.find(p => p.id === oxTargetId) : null;
+          if (!oxTarget || !oxTarget.alive || oxTarget.id === executedId) {
+            alert('산화 대상을 선택해야 합니다.');
+            // 되돌리기 가능하도록 snapshot은 이미 찍었으니 즉시 되돌리기 대신 UI 재표시
+            // (처형 확정은 중단)
+            return;
+          }
+          oxTarget.alive = false;
+          evs.push({ type: 'TERROR_OXIDATION', terroristId: executedId, targetId: oxTarget.id, mode: 'OXIDATION' });
+          game.executionOxidationTarget = null;
+        }
+
+        game.eventQueue = { token: Date.now(), events: evs };
       }
-      if (result.chain.length) {
-        evs.push({ type: 'TERROR_CHAIN', terroristId: executedId, targetId: result.chain[0] });
-      }
-
-      game.eventQueue = { token: Date.now(), events: evs };
 
       const winner = checkWin(game);
       if (winner) { game.phase = PHASE.END; game.winner = winner; setTimerStopped(); }
@@ -940,6 +996,7 @@ function wireControlPanel() {
         setTimerInfinite();
         game.votes = {};
         game.executionTarget = null;
+        game.executionOxidationTarget = null;
         initNightDraft();
       }
 
@@ -951,11 +1008,16 @@ function wireControlPanel() {
       const ok = await modalConfirm('처형 취소', '처형 없이 다음 밤으로 넘어갈까요?');
       if (!ok) return;
       snapshot(game);
+
+      // 부결 연출
+      game.eventQueue = { token: Date.now(), events: [{ type: 'REJECTED' }] };
+
       game.night += 1;
       game.phase = PHASE.NIGHT;
       setTimerInfinite();
       game.votes = {};
       game.executionTarget = null;
+      game.executionOxidationTarget = null;
       initNightDraft();
       await sync();
       render();
