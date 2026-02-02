@@ -75,13 +75,33 @@
 <script>
   const $ = (id) => document.getElementById(id);
 
+  const KEY = 'mafia42.preview.state.v1';
+  const CHANNEL = 'mafia42-preview';
+
+  const CARD = {
+    CITIZEN:'assets/cards/citizen.png',
+    MAFIA:'assets/cards/mafia.png',
+    POLICE:'assets/cards/police.png',
+    DOCTOR:'assets/cards/doctor.png',
+    SOLDIER:'assets/cards/army.png',
+    REPORTER:'assets/cards/reporter.png',
+    POLITICIAN:'assets/cards/citizen.png',
+    DETECTIVE:'assets/cards/detective.png',
+    SPY:'assets/cards/spy.png',
+    TERRORIST:'assets/cards/terrorist.png',
+    ARMY:'assets/cards/army.png'
+  };
+
   const state = {
     count: 8,
     longNames: false,
     randomDead: false,
     players: [],
     phase: 'DAY',
-    timerSec: 180
+    timerSec: 180,
+    timerMaxSec: 300,
+    // 외부(host-preview)에서 동기화된 상태가 있으면 그걸 우선
+    synced: null
   };
 
   function escapeHtml(s){
@@ -119,9 +139,11 @@
 
   function renderSeat(p){
     const dead = p.alive === false;
+    const pub = String(p.publicCard || 'CITIZEN');
+    const img = CARD[pub] || CARD.CITIZEN;
     return `
       <div class="seat ${dead ? 'dead' : ''}">
-        <div class="imgwrap"><img src="assets/cards/citizen.png" alt=""></div>
+        <div class="imgwrap"><img src="${img}" alt=""></div>
         <div class="name">${escapeHtml(p.name)}</div>
       </div>
     `;
@@ -145,22 +167,38 @@
   }
 
   function render(){
+    const src = state.synced;
+
     // players
-    state.players = mkPlayers(state.count);
-    applyRandomDead();
+    if (src && Array.isArray(src.players)) {
+      state.players = src.players.map((p, i) => ({
+        id: i,
+        name: String(p?.name || `P${i+1}`),
+        alive: (p?.alive !== false),
+        publicCard: String(p?.publicCard || 'CITIZEN')
+      }));
+      state.count = state.players.length;
+      state.phase = String(src.phase || 'DAY');
+      state.timerSec = Number(src.timerSec || 0);
+      state.timerMaxSec = Number(src.timerMaxSec || 300);
+    } else {
+      state.players = mkPlayers(state.count);
+      applyRandomDead();
+    }
 
     const cols = colsFor(state.players.length);
     $('tableRoot').style.setProperty('--seat-cols', String(cols));
     $('gridSeats').innerHTML = state.players.map(renderSeat).join('');
 
-    // center
     const aliveCount = state.players.filter(p => p.alive).length;
     $('phaseTitle').textContent = state.phase;
     $('phaseTime').textContent = formatTimer(state.timerSec);
     $('phaseSub').textContent = `생존 ${aliveCount}/${state.players.length}`;
-    const max = Number($('timerRange')?.max || 300);
+
+    const max = src ? Math.max(1, Number(state.timerMaxSec || 300)) : Number($('timerRange')?.max || 300);
     const pct = max ? Math.max(0, Math.min(100, (state.timerSec / max) * 100)) : 0;
     $('timerFill').style.width = pct + '%';
+
     $('countLabel').textContent = String(state.count);
     $('timerSecLabel').textContent = String(state.timerSec);
   }
@@ -198,6 +236,33 @@
   // init
   $('phaseSel').value = state.phase;
   $('timerRange').value = String(state.timerSec);
+
+  // 외부 상태 수신(BroadcastChannel + localStorage)
+  try {
+    const bc = new BroadcastChannel(CHANNEL);
+    bc.onmessage = (e) => {
+      const msg = e?.data;
+      if (msg?.type !== 'STATE' || !msg?.state) return;
+      state.synced = msg.state;
+      render();
+    };
+  } catch {}
+
+  // storage 이벤트(다른 탭에서 host-preview가 저장했을 때)
+  window.addEventListener('storage', (e) => {
+    if (e.key !== KEY) return;
+    try {
+      state.synced = JSON.parse(e.newValue || 'null');
+      render();
+    } catch {}
+  });
+
+  // 최초 1회 localStorage에서 읽기
+  try {
+    const raw = localStorage.getItem(KEY);
+    if (raw) state.synced = JSON.parse(raw);
+  } catch {}
+
   render();
 </script>
 </body>

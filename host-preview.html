@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <title>Host Preview (No GAS)</title>
+  <link rel="stylesheet" href="css/theme.css">
+  <link rel="stylesheet" href="css/components.css">
+  <link rel="stylesheet" href="css/layout.css">
+  <link rel="stylesheet" href="css/effects.css">
+  <style>
+    body{margin:0}
+    .wrap{width:min(96vw,1100px);margin:0 auto;padding:14px;display:flex;flex-direction:column;gap:12px}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    @media (max-width: 860px){.grid2{grid-template-columns:1fr}}
+    .panel{border:1px solid rgba(255,255,255,.08);background:rgba(2,6,23,.6);border-radius:16px;padding:12px;box-shadow:var(--shadow)}
+    .mini{font-size:.9rem;color:var(--muted)}
+    input[type="text"], select, input[type="number"]{width:100%}
+    .players{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+    @media (max-width: 860px){.players{grid-template-columns:1fr}}
+    .p{display:grid;grid-template-columns:1.2fr .6fr .8fr;gap:8px;align-items:center}
+    .p .actions{display:flex;gap:8px;justify-content:flex-end}
+    .badge2{display:inline-flex;align-items:center;gap:8px}
+    .hint{color:var(--muted);font-size:.9rem}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="row">
+      <span class="badge">Host Preview (No GAS)</span>
+      <span class="badge2 mini">Sync: <b id="syncStatus">준비</b></span>
+      <span class="mini">(별도 탭에 <b>layout-preview.html</b> 열면 자동 연동)</span>
+    </div>
+
+    <div class="grid2">
+      <div class="panel">
+        <h3 style="margin:0 0 10px">상태</h3>
+        <div class="row">
+          <label class="mini">인원 <b id="countLabel">8</b></label>
+          <input id="countRange" type="range" min="8" max="12" step="1" value="8" style="width:220px" />
+
+          <label class="mini">Phase</label>
+          <select id="phaseSel" style="width:180px">
+            <option value="GAME SET">GAME SET</option>
+            <option value="NIGHT">NIGHT</option>
+            <option value="DAY" selected>DAY</option>
+            <option value="VOTE">VOTE</option>
+            <option value="MAFIA WIN">MAFIA WIN</option>
+            <option value="CITIZEN WIN">CITIZEN WIN</option>
+          </select>
+
+          <label class="mini">타이머(초)</label>
+          <input id="timerSec" type="number" min="0" max="9999" value="180" style="width:120px" />
+
+          <label class="mini">최대(초)</label>
+          <input id="timerMax" type="number" min="1" max="9999" value="300" style="width:120px" />
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button id="btnReset" class="primary">플레이어 재생성</button>
+          <button id="btnShuffle">이름 섞기</button>
+          <button id="btnRandomDead">랜덤 사망</button>
+          <button id="btnAllAlive">전원 생존</button>
+        </div>
+        <div class="hint" style="margin-top:8px">
+          이 페이지는 Host 역할(상태 변경)만 합니다. Display 역할은 <b>layout-preview.html</b>에서 확인하세요.
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3 style="margin:0 0 10px">딜(옵션)</h3>
+        <div class="row">
+          <label class="mini"><input id="dealEnabled" type="checkbox" /> DEAL 화면 표시</label>
+          <button id="btnDealReset">덱 초기화</button>
+        </div>
+        <div class="hint" style="margin-top:8px">
+          실제 게임과 동일 동작은 아니고, 레이아웃/이벤트 테스트용입니다.
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h3 style="margin:0 0 10px">플레이어</h3>
+      <div class="players" id="players"></div>
+    </div>
+  </div>
+
+<script>
+  const KEY = 'mafia42.preview.state.v1';
+  const CHANNEL = 'mafia42-preview';
+
+  const CARD = {
+    CITIZEN:'assets/cards/citizen.png',
+    MAFIA:'assets/cards/mafia.png',
+    POLICE:'assets/cards/police.png',
+    DOCTOR:'assets/cards/doctor.png',
+    SOLDIER:'assets/cards/army.png',
+    REPORTER:'assets/cards/reporter.png',
+    POLITICIAN:'assets/cards/citizen.png',
+    DETECTIVE:'assets/cards/detective.png',
+    SPY:'assets/cards/spy.png',
+    TERRORIST:'assets/cards/terrorist.png',
+    ARMY:'assets/cards/army.png'
+  };
+
+  const ROLES = Object.keys(CARD);
+
+  function $(id){ return document.getElementById(id); }
+  function escapeHtml(s){
+    return String(s ?? '')
+      .replaceAll('&','&amp;')
+      .replaceAll('<','&lt;')
+      .replaceAll('>','&gt;')
+      .replaceAll('"','&quot;')
+      .replaceAll("'",'&#39;');
+  }
+
+  function mkPlayers(n){
+    const out = [];
+    for (let i=0;i<n;i++) out.push({ id:i, name:`P${i+1}`, alive:true, publicCard:'CITIZEN' });
+    return out;
+  }
+
+  function shuffle(a){
+    const x=[...a];
+    for (let i=x.length-1;i>0;i--){
+      const j=Math.floor(Math.random()*(i+1));
+      [x[i],x[j]]=[x[j],x[i]];
+    }
+    return x;
+  }
+
+  let state = {
+    v: 1,
+    phase: 'DAY',
+    timerSec: 180,
+    timerMaxSec: 300,
+    players: mkPlayers(8),
+    deal: { enabled:false, used: Array.from({length:8}).map(()=>false) }
+  };
+
+  function normalizeState(s){
+    const n = Math.max(8, Math.min(12, Number(s?.players?.length || 8)));
+    const players = Array.isArray(s?.players) ? s.players.slice(0, n) : mkPlayers(n);
+    while (players.length < n) players.push({ id: players.length, name:`P${players.length+1}`, alive:true, publicCard:'CITIZEN' });
+    players.forEach((p, i) => {
+      p.id = i;
+      p.name = String(p.name || `P${i+1}`);
+      p.alive = (p.alive !== false);
+      p.publicCard = ROLES.includes(String(p.publicCard)) ? String(p.publicCard) : 'CITIZEN';
+    });
+    const timerMaxSec = Math.max(1, Number(s?.timerMaxSec || 300));
+    const timerSec = Math.max(0, Math.min(timerMaxSec, Number(s?.timerSec || 0)));
+    const dealEnabled = !!s?.deal?.enabled;
+    const used = Array.isArray(s?.deal?.used) ? s.deal.used.slice(0, n).map(v=>!!v) : Array.from({length:n}).map(()=>false);
+    while (used.length < n) used.push(false);
+
+    return {
+      v: 1,
+      phase: String(s?.phase || 'DAY'),
+      timerSec,
+      timerMaxSec,
+      players,
+      deal: { enabled: dealEnabled, used }
+    };
+  }
+
+  function saveAndBroadcast(){
+    state = normalizeState(state);
+    try{ localStorage.setItem(KEY, JSON.stringify(state)); }catch{}
+    try{ bc?.postMessage({ type:'STATE', state }); }catch{}
+    $('syncStatus').textContent = '송신';
+    setTimeout(()=>{ $('syncStatus').textContent = '대기'; }, 300);
+  }
+
+  function renderPlayers(){
+    $('countLabel').textContent = String(state.players.length);
+    $('countRange').value = String(state.players.length);
+    $('phaseSel').value = state.phase;
+    $('timerSec').value = String(state.timerSec);
+    $('timerMax').value = String(state.timerMaxSec);
+    $('dealEnabled').checked = !!state.deal.enabled;
+
+    const wrap = $('players');
+    wrap.innerHTML = '';
+
+    state.players.forEach((p, idx) => {
+      const row = document.createElement('div');
+      row.className = 'p';
+      row.innerHTML = `
+        <div>
+          <label class="mini">이름</label>
+          <input type="text" data-k="name" data-i="${idx}" value="${escapeHtml(p.name)}" />
+        </div>
+        <div>
+          <label class="mini">생존</label>
+          <select data-k="alive" data-i="${idx}">
+            <option value="1" ${p.alive ? 'selected':''}>생존</option>
+            <option value="0" ${!p.alive ? 'selected':''}>사망</option>
+          </select>
+        </div>
+        <div>
+          <label class="mini">publicCard</label>
+          <select data-k="publicCard" data-i="${idx}">
+            ${ROLES.map(r => `<option value="${r}" ${(p.publicCard===r)?'selected':''}>${r}</option>`).join('')}
+          </select>
+        </div>
+      `;
+      wrap.appendChild(row);
+    });
+
+    // wire
+    wrap.querySelectorAll('input[data-k], select[data-k]').forEach(el => {
+      el.addEventListener('input', () => {
+        const i = Number(el.dataset.i);
+        const k = el.dataset.k;
+        if (!Number.isFinite(i) || !k) return;
+        const p = state.players[i];
+        if (!p) return;
+        if (k === 'name') p.name = el.value;
+        if (k === 'alive') p.alive = (String(el.value) === '1');
+        if (k === 'publicCard') p.publicCard = String(el.value);
+        saveAndBroadcast();
+      });
+    });
+  }
+
+  // sync receive
+  let bc = null;
+  try{
+    bc = new BroadcastChannel(CHANNEL);
+    bc.onmessage = (e) => {
+      const msg = e?.data;
+      if (msg?.type !== 'STATE' || !msg?.state) return;
+      state = normalizeState(msg.state);
+      renderPlayers();
+    };
+  }catch{}
+
+  // load from storage
+  try{
+    const raw = localStorage.getItem(KEY);
+    if (raw) state = normalizeState(JSON.parse(raw));
+  }catch{}
+
+  // controls
+  $('countRange').addEventListener('input', (e) => {
+    const n = Number(e.target.value);
+    state.players = mkPlayers(n);
+    state.deal.used = Array.from({length:n}).map(()=>false);
+    renderPlayers();
+    saveAndBroadcast();
+  });
+
+  $('phaseSel').addEventListener('change', (e) => {
+    state.phase = String(e.target.value);
+    saveAndBroadcast();
+  });
+
+  function clampTimer(){
+    const max = Math.max(1, Number($('timerMax').value || 300));
+    const sec = Math.max(0, Math.min(max, Number($('timerSec').value || 0)));
+    state.timerMaxSec = max;
+    state.timerSec = sec;
+    $('timerMax').value = String(max);
+    $('timerSec').value = String(sec);
+  }
+
+  $('timerSec').addEventListener('input', () => { clampTimer(); saveAndBroadcast(); });
+  $('timerMax').addEventListener('input', () => { clampTimer(); saveAndBroadcast(); });
+
+  $('btnReset').addEventListener('click', () => {
+    const n = state.players.length;
+    state.players = mkPlayers(n);
+    state.deal.used = Array.from({length:n}).map(()=>false);
+    renderPlayers();
+    saveAndBroadcast();
+  });
+
+  $('btnShuffle').addEventListener('click', () => {
+    const names = shuffle(state.players.map(p=>p.name));
+    state.players.forEach((p,i)=>p.name=names[i]);
+    renderPlayers();
+    saveAndBroadcast();
+  });
+
+  $('btnRandomDead').addEventListener('click', () => {
+    state.players.forEach(p=>p.alive = Math.random() > 0.25);
+    if (!state.players.some(p=>p.alive)) state.players[0].alive = true;
+    renderPlayers();
+    saveAndBroadcast();
+  });
+
+  $('btnAllAlive').addEventListener('click', () => {
+    state.players.forEach(p=>p.alive = true);
+    renderPlayers();
+    saveAndBroadcast();
+  });
+
+  $('dealEnabled').addEventListener('change', (e) => {
+    state.deal.enabled = !!e.target.checked;
+    saveAndBroadcast();
+  });
+
+  $('btnDealReset').addEventListener('click', () => {
+    state.deal.used = Array.from({length: state.players.length}).map(()=>false);
+    saveAndBroadcast();
+  });
+
+  // init
+  renderPlayers();
+  saveAndBroadcast();
+  $('syncStatus').textContent = '대기';
+</script>
+</body>
+</html>
