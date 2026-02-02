@@ -96,6 +96,113 @@ function rolePoolFor(n) {
   while (pool.length < n) pool.push(ROLE.CITIZEN);
   return pool.slice(0, n);
 }
+
+const DECK_ROLE_ORDER = [
+  ROLE.MAFIA,
+  ROLE.SPY,
+  ROLE.POLICE,
+  ROLE.DOCTOR,
+  ROLE.SOLDIER,
+  ROLE.REPORTER,
+  ROLE.POLITICIAN,
+  ROLE.TERRORIST,
+  ROLE.DETECTIVE,
+  ROLE.ARMY,
+  ROLE.CITIZEN,
+];
+const DECK_CONFIG_STORAGE_KEY = 'am.deckConfigByCount.v1';
+
+function clampInt(v, min, max) {
+  const n = Number.parseInt(String(v ?? '0'), 10);
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, Math.min(max, n));
+}
+
+function defaultDeckConfigFor(n) {
+  const cfg = {};
+  for (const r of DECK_ROLE_ORDER) cfg[r] = 0;
+  for (const r of rolePoolFor(n)) cfg[r] = (cfg[r] || 0) + 1;
+  return cfg;
+}
+
+function loadDeckConfigByCount() {
+  try {
+    const raw = localStorage.getItem(DECK_CONFIG_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return {};
+    return parsed;
+  } catch {
+    return {};
+  }
+}
+
+function saveDeckConfigForCount(playerCount, cfg) {
+  const byCount = loadDeckConfigByCount();
+  byCount[String(playerCount)] = cfg;
+  try { localStorage.setItem(DECK_CONFIG_STORAGE_KEY, JSON.stringify(byCount)); } catch {}
+}
+
+function sanitizeDeckConfig(cfg) {
+  const out = {};
+  for (const r of DECK_ROLE_ORDER) {
+    if (r === ROLE.CITIZEN) continue; // 시민은 자동 계산
+    out[r] = clampInt(cfg?.[r] ?? 0, 0, 3);
+  }
+  return out;
+}
+
+function getDeckConfigForGame() {
+  const n = game.players.length;
+  if (!game.deckConfig) {
+    const byCount = loadDeckConfigByCount();
+    const fromStorage = byCount[String(n)];
+    game.deckConfig = sanitizeDeckConfig(fromStorage);
+    if (!Object.keys(game.deckConfig).length) {
+      game.deckConfig = sanitizeDeckConfig(defaultDeckConfigFor(n));
+    }
+  }
+  // 누락 키 보정
+  game.deckConfig = sanitizeDeckConfig(game.deckConfig);
+  return game.deckConfig;
+}
+
+function computeDeckSummary(cfg, n) {
+  const safe = sanitizeDeckConfig(cfg);
+  const nonCitizenRoles = DECK_ROLE_ORDER.filter(r => r !== ROLE.CITIZEN);
+  const sumNonCitizen = nonCitizenRoles.reduce((acc, r) => acc + (safe[r] || 0), 0);
+  const citizenCount = n - sumNonCitizen;
+
+  const errors = [];
+  if ((safe[ROLE.MAFIA] || 0) < 1) errors.push('마피아는 최소 1장 필요합니다.');
+  if (sumNonCitizen > n) errors.push(`특수직업 합계(${sumNonCitizen})가 인원(${n})을 초과합니다.`);
+  if (citizenCount < 0) errors.push('시민 카드가 음수가 됩니다.');
+
+  return {
+    cfg: safe,
+    n,
+    sumNonCitizen,
+    citizenCount,
+    total: sumNonCitizen + Math.max(0, citizenCount),
+    valid: errors.length === 0,
+    errors,
+  };
+}
+
+function buildDeckFromConfig(cfg, n) {
+  const summary = computeDeckSummary(cfg, n);
+  if (!summary.valid) {
+    throw new Error(summary.errors[0] || '덱 구성이 올바르지 않습니다.');
+  }
+  const deck = [];
+  for (const r of DECK_ROLE_ORDER) {
+    if (r === ROLE.CITIZEN) continue;
+    const c = summary.cfg[r] || 0;
+    for (let i = 0; i < c; i++) deck.push(r);
+  }
+  for (let i = 0; i < summary.citizenCount; i++) deck.push(ROLE.CITIZEN);
+  return deck;
+}
 function initNightDraft() {
   const find = (r) => game.players.find(p => p.role === r && p.alive)?.id ?? null;
   nightDraft = {
@@ -199,6 +306,10 @@ function renderBadgeOnly() {
 }
 
 function render() {
+  const deckCfg = getDeckConfigForGame();
+  const deckSummary = computeDeckSummary(deckCfg, game.players.length);
+  const canDeal = connected && !game.winner && deckSummary.valid;
+
   const aliveCount = game.players.filter(p => p.alive).length;
   const remaining = getTimerRemaining(game.timer);
   const timerText =
@@ -253,9 +364,34 @@ function render() {
         </div>
         <label>플레이어 이름</label>
         <div id="names" class="grid cols2"></div>
+
+        <div style="margin-top:12px">
+          <label>덱 구성 (직업별 0~3장, 시민은 자동)</label>
+          <div class="grid cols2" id="deckConfig">
+            ${DECK_ROLE_ORDER.filter(r => r !== ROLE.CITIZEN).map(r => {
+              const label = ROLE_LABEL[r] || r;
+              const v = deckCfg?.[r] ?? 0;
+              return `<div>
+                <label>${label}</label>
+                <input type="number" min="0" max="3" value="${v}" data-deck-role="${r}">
+              </div>`;
+            }).join('')}
+            <div>
+              <label>시민(자동)</label>
+              <input type="text" value="${Math.max(0, deckSummary.citizenCount)}" disabled>
+            </div>
+          </div>
+          <div class="actions" style="margin-top:8px">
+            <button id="deckReset">기본값</button>
+            <span class="badge">총 ${deckSummary.total}/${game.players.length}</span>
+            ${deckSummary.valid ? '' : '<span class="badge" style="background:rgba(239,68,68,.18);border-color:rgba(239,68,68,.35)">덱 오류</span>'}
+          </div>
+          ${deckSummary.errors.length ? `<p class="muted small" style="color:rgba(239,68,68,.92)">${deckSummary.errors.join(' / ')}</p>` : '<p class="muted small">특수직업 합계가 인원을 넘지 않으면 시민이 자동으로 채워집니다.</p>'}
+        </div>
+
         <div class="actions" style="margin-top:10px">
           <button id="applyBtn">적용</button>
-          <button class="primary" id="dealStartBtn" ${connected && !game.winner ? '' : 'disabled'}>배정 시작</button>
+          <button class="primary" id="dealStartBtn" ${canDeal ? '' : 'disabled'}>배정 시작</button>
           <button class="danger" id="forceEndBtn">강제 종료</button>
         </div>
       </div>
@@ -316,6 +452,11 @@ function render() {
       return { id: i, name };
     });
     game = createGame(newPlayers);
+
+    // 인원 변경 시 덱 구성도 해당 인원 기본값으로 맞춤
+    game.deckConfig = sanitizeDeckConfig(defaultDeckConfigFor(n));
+    saveDeckConfigForCount(n, game.deckConfig);
+
     sync(); render();
   };
 
@@ -347,12 +488,39 @@ function render() {
     });
 
     game.reporterUsedOnce = false;
-    game.deck = shuffle(rolePoolFor(game.players.length));
+    // UI 덱 구성 기반으로 카드 생성
+    try {
+      game.deck = shuffle(buildDeckFromConfig(getDeckConfigForGame(), game.players.length));
+    } catch (e) {
+      alert(e.message || String(e));
+      render();
+      return;
+    }
     game.deckUsed = Array.from({ length: game.players.length }).map(() => false);
 
     await sync();
     render();
   };
+
+  // deck config
+  const deckResetBtn = app.querySelector('#deckReset');
+  if (deckResetBtn) deckResetBtn.onclick = () => {
+    const n = game.players.length;
+    game.deckConfig = sanitizeDeckConfig(defaultDeckConfigFor(n));
+    saveDeckConfigForCount(n, game.deckConfig);
+    render();
+  };
+
+  app.querySelectorAll('input[data-deck-role]').forEach(inp => {
+    inp.onchange = () => {
+      const role = inp.getAttribute('data-deck-role');
+      const cfg = getDeckConfigForGame();
+      cfg[role] = clampInt(inp.value, 0, 3);
+      game.deckConfig = sanitizeDeckConfig(cfg);
+      saveDeckConfigForCount(game.players.length, game.deckConfig);
+      render();
+    };
+  });
 
   app.querySelector('#forceEndBtn').onclick = async () => {
     const ok = await modalConfirm('강제 종료', 'SETUP으로 초기화할까요? (되돌리기 가능)');

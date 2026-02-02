@@ -1,5 +1,5 @@
 import { genRoomCode, getState, patchState, pushAction } from './gasApi.js';
-import { PHASE, CARD } from '../src/constants.js';
+import { PHASE, CARD, ROLE_LABEL } from '../src/constants.js';
 
 let root = null;
 
@@ -12,6 +12,8 @@ let pollTimer = null;
 let beatTimer = null;
 let failures = 0;
 let lastRenderKey = null;
+let lastEventToken = null;
+let revealTimer = null;
 
 const POLL_MS = 800;
 const BEAT_MS = 2000;
@@ -46,12 +48,13 @@ function computeRenderKey(st) {
   // eventQueue.token에만 묶지 말고, phase/timer/players/deck을 포함
   const phase = st?.phase ?? '';
   const hb = st?.hostHeartbeat ?? '';
+  const ev = st?.eventQueue?.token ?? '';
   const mode = st?.timer?.mode ?? '';
   const endAt = st?.timer?.endAt ?? '';
   const alive = (st?.players || []).map(p => (p?.alive === false ? '0' : '1')).join('');
   const pub = (st?.players || []).map(p => (p?.publicCard || '')).join('|');
   const used = getDeckUsed(st).map(v => (v ? '1' : '0')).join('');
-  return `${phase}|${hb}|${mode}|${endAt}|${alive}|${pub}|${used}`;
+  return `${phase}|${hb}|${ev}|${mode}|${endAt}|${alive}|${pub}|${used}`;
 }
 
 /* =========================
@@ -145,13 +148,16 @@ function renderDisconnected() {
 /* =========================
    DEAL UI
 ========================= */
-function renderDealPanel(state) {
+function renderDealPanelInner(state) {
   const used = getDeckUsed(state);
   const remain = used.filter(v => !v).length;
 
   return `
-    <div class="dealwrap">
-      <h3>직업 배정 (남은 카드 ${remain})</h3>
+    <div class="dealModal" role="dialog" aria-modal="true">
+      <div class="dealHeader">
+        <h3 style="margin:0">직업 배정</h3>
+        <div class="muted small">남은 카드 ${remain}</div>
+      </div>
       <div class="deck">
         ${used.map((u, i) => {
           const pending = pendingDealPick.has(i);
@@ -163,17 +169,110 @@ function renderDealPanel(state) {
           `;
         }).join('')}
       </div>
+      <div class="actions" style="margin-top:12px; justify-content:flex-end">
+        <button id="dealClose">닫기</button>
+      </div>
     </div>
   `;
 }
 
-function guessNextPlayer(state) {
-  const p = state.players.find(x => x.assigned === false);
-  return p ? p.id : 0;
+function ensureOverlayRoot() {
+  let el = document.getElementById('overlayRoot');
+  if (el) return el;
+  el = document.createElement('div');
+  el.id = 'overlayRoot';
+  document.body.appendChild(el);
+  return el;
+}
+
+function closeOverlayById(id) {
+  const el = document.getElementById(id);
+  if (el) el.remove();
+}
+
+function syncDealOverlay(state) {
+  const phase = state?.phase || PHASE.SETUP;
+
+  // DEAL 아닐 때: 딜 UI 제거
+  if (phase !== PHASE.DEAL) {
+    closeOverlayById('dealOverlay');
+    return;
+  }
+
+  const overlayRoot = ensureOverlayRoot();
+  let el = document.getElementById('dealOverlay');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'dealOverlay';
+    el.className = 'dealBackdrop';
+    overlayRoot.appendChild(el);
+    el.addEventListener('click', (e) => {
+      if (e.target === el) el.remove();
+    });
+  }
+
+  el.innerHTML = renderDealPanelInner(state);
+  wireDeal(state);
+}
+
+function openAssignModal({ state, cardIndex }) {
+  const players = Array.isArray(state?.players) ? state.players : [];
+  const unassigned = players.filter(p => p?.assigned === false);
+  if (!unassigned.length) return;
+
+  const overlayRoot = ensureOverlayRoot();
+  closeOverlayById('assignModal');
+
+  const modal = document.createElement('div');
+  modal.id = 'assignModal';
+  modal.className = 'dealBackdrop';
+  modal.innerHTML = `
+    <div class="dealModal" role="dialog" aria-modal="true">
+      <div class="dealHeader">
+        <h3 style="margin:0">대상 선택</h3>
+        <div class="muted small">카드 #${cardIndex + 1}</div>
+      </div>
+      <label class="muted small">플레이어</label>
+      <select id="assignSel">
+        ${unassigned.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('')}
+      </select>
+      <div class="actions" style="margin-top:12px; justify-content:flex-end">
+        <button id="assignCancel">취소</button>
+        <button class="primary" id="assignOk">확정</button>
+      </div>
+    </div>
+  `;
+  overlayRoot.appendChild(modal);
+
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) modal.remove();
+  });
+
+  modal.querySelector('#assignCancel').onclick = () => modal.remove();
+  modal.querySelector('#assignOk').onclick = async () => {
+    const sel = modal.querySelector('#assignSel');
+    const playerId = sel ? Number(sel.value) : null;
+    if (!Number.isFinite(playerId)) return;
+    modal.querySelector('#assignOk').disabled = true;
+
+    pendingDealPick.add(cardIndex);
+    try {
+      await pushAction(roomCode, { type: 'DEAL_PICK', cardIndex, playerId });
+      modal.remove();
+    } catch {
+      pendingDealPick.delete(cardIndex);
+      modal.querySelector('#assignOk').disabled = false;
+      alert('전송 실패');
+    }
+  };
 }
 
 function wireDeal(state) {
   const used = getDeckUsed(state);
+  const closeBtn = document.getElementById('dealClose');
+  if (closeBtn) closeBtn.onclick = () => {
+    closeOverlayById('dealOverlay');
+  };
 
   document.querySelectorAll('.cardbtn').forEach(btn => {
     btn.onclick = async () => {
@@ -181,23 +280,52 @@ function wireDeal(state) {
       if (!Number.isFinite(idx)) return;
       if (used[idx]) return;
       if (pendingDealPick.has(idx)) return;
-
-      pendingDealPick.add(idx);
-      btn.disabled = true;
-
-      try {
-        await pushAction(roomCode, {
-          type: 'DEAL_PICK',
-          cardIndex: idx,
-          playerId: guessNextPlayer(state)
-        });
-      } catch {
-        pendingDealPick.delete(idx);
-        btn.disabled = false;
-        alert('전송 실패');
-      }
+      openAssignModal({ state, cardIndex: idx });
     };
   });
+}
+
+function showDealReveal({ playerName, role }) {
+  const overlayRoot = ensureOverlayRoot();
+  closeOverlayById('dealReveal');
+  if (revealTimer) { clearTimeout(revealTimer); revealTimer = null; }
+
+  const roleKey = String(role || 'CITIZEN');
+  const img = CARD[roleKey] || CARD.CITIZEN;
+  const label = ROLE_LABEL?.[roleKey] || roleKey;
+
+  const el = document.createElement('div');
+  el.id = 'dealReveal';
+  el.className = 'dealBackdrop';
+  el.innerHTML = `
+    <div class="revealModal" role="dialog" aria-modal="true">
+      <div class="revealTitle">${escapeHtml(playerName)}님은</div>
+      <img class="revealImg" src="${img}" alt="">
+      <div class="revealSub">${escapeHtml(label)}이(가) 되었습니다.</div>
+      <div class="muted small">3초 후 자동 닫힘</div>
+    </div>
+  `;
+  overlayRoot.appendChild(el);
+
+  revealTimer = setTimeout(() => {
+    closeOverlayById('dealReveal');
+    revealTimer = null;
+  }, 3000);
+}
+
+function handleEvents(state) {
+  const token = state?.eventQueue?.token ?? null;
+  if (token == null || token === lastEventToken) return;
+  lastEventToken = token;
+
+  const events = Array.isArray(state?.eventQueue?.events) ? state.eventQueue.events : [];
+  const deal = events.find(e => e?.type === 'DEAL_REVEAL');
+  if (deal) {
+    const players = Array.isArray(state?.players) ? state.players : [];
+    const p = players.find(x => x?.id === deal.playerId);
+    const name = p?.name || `P${Number(deal.playerId) + 1}`;
+    showDealReveal({ playerName: name, role: deal.role });
+  }
 }
 
 /* =========================
@@ -258,13 +386,15 @@ function renderTable(state) {
           ${seatHtml}
         </div>
       </div>
-
-      ${phase === PHASE.DEAL ? renderDealPanel(state) : ''}
     </div>
   `;
 
-  if (phase === PHASE.DEAL) wireDeal(state);
-  else pendingDealPick.clear();
+  handleEvents(state);
+
+  // 딜 UI는 항상 body overlayRoot에 올림(테이블 위 오버레이)
+  syncDealOverlay(state);
+
+  if (phase !== PHASE.DEAL) pendingDealPick.clear();
 }
 
 /* =========================

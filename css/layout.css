@@ -120,7 +120,9 @@
 .dealBackdrop{
   position:fixed;
   inset:0;
-  background:rgba(0,0,0,.55);
+  background:rgba(2,6,23,.45);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
   display:flex;
   align-items:center;
   justify-content:center;
@@ -128,15 +130,18 @@
   z-index:9999;
 }
 .dealModal{
-  width:min(92vw, 720px);
+  width:min(80vw, 1100px);
+  height:min(80vh, 720px);
   border-radius:16px;
   border:1px solid rgba(255,255,255,.10);
   background:rgba(2,6,23,.92);
   box-shadow: var(--shadow);
   padding:14px;
+  display:flex;
+  flex-direction:column;
 }
 .dealHeader{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:10px}
-.deck{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.deck{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;overflow:auto;padding:4px}
 @media(min-width:900px){ .deck{grid-template-columns:repeat(4,1fr);} }
 .cardbtn{border-radius:14px;border:1px solid rgba(255,255,255,.08);background:rgba(15,23,42,.55);padding:8px;cursor:pointer}
 .cardbtn img{width:100%;border-radius:12px;border:1px solid var(--border)}
