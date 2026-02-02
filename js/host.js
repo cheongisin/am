@@ -248,7 +248,7 @@ async function startRoom(code) {
   hostBeatTimer = setInterval(heartbeat, 2000);
 
   if (actionPollTimer) clearInterval(actionPollTimer);
-  actionPollTimer = setInterval(pollActions, 600); // 500→600ms (약간 여유)
+  actionPollTimer = setInterval(pollActions, 1000);
 
   render();
 }

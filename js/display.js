@@ -15,12 +15,13 @@ let lastRenderKey = null;
 let lastEventToken = null;
 let revealTimer = null;
 
-const POLL_MS = 800;
+const POLL_MS = 1200;
 const BEAT_MS = 2000;
 const FAIL_TO_DISCONNECT = 6;
 
 // DEAL 클릭-폴링 레이스 방지(최소 로컬 상태)
 const pendingDealPick = new Set();
+let dealPickInFlight = null; // {cardIndex, playerId, startedAt}
 
 /* =========================
    유틸
@@ -203,6 +204,11 @@ function openAssignModal({ state, cardIndex }) {
   const unassigned = players.filter(p => p?.assigned === false);
   if (!unassigned.length) return;
 
+  if (dealPickInFlight) {
+    alert('처리 중입니다. 잠시만 기다려주세요.');
+    return;
+  }
+
   const overlayRoot = ensureOverlayRoot();
   closeOverlayById('assignModal');
 
@@ -239,11 +245,13 @@ function openAssignModal({ state, cardIndex }) {
     modal.querySelector('#assignOk').disabled = true;
 
     pendingDealPick.add(cardIndex);
+    dealPickInFlight = { cardIndex, playerId, startedAt: Date.now() };
     try {
       await pushAction(roomCode, { type: 'DEAL_PICK', cardIndex, playerId });
       modal.remove();
     } catch {
       pendingDealPick.delete(cardIndex);
+      dealPickInFlight = null;
       modal.querySelector('#assignOk').disabled = false;
       alert('전송 실패');
     }
@@ -263,6 +271,7 @@ function wireDeal(state) {
       const idx = Number(btn.dataset.idx);
       if (!Number.isFinite(idx)) return;
       if (used[idx]) return;
+      if (dealPickInFlight) return;
       if (pendingDealPick.has(idx)) return;
       openAssignModal({ state, cardIndex: idx });
     };
@@ -309,6 +318,10 @@ function handleEvents(state) {
     const p = players.find(x => x?.id === deal.playerId);
     const name = p?.name || `P${Number(deal.playerId) + 1}`;
     showDealReveal({ playerName: name, role: deal.role });
+
+    // ACK: 실제 배정이 반영되었다고 보고 pending 해제
+    if (Number.isFinite(deal.cardIndex)) pendingDealPick.delete(Number(deal.cardIndex));
+    dealPickInFlight = null;
   }
 }
 
@@ -376,6 +389,20 @@ function renderTable(state) {
   `;
 
   handleEvents(state);
+
+  // 상태가 실제로 업데이트되었으면(used=true) pending도 정리
+  const usedNow = getDeckUsed(state);
+  if (dealPickInFlight && usedNow[dealPickInFlight.cardIndex]) {
+    pendingDealPick.delete(dealPickInFlight.cardIndex);
+    dealPickInFlight = null;
+  }
+
+  // ACK가 오래 안 오면(호스트 무시/통신 실패) UI를 풀어준다
+  if (dealPickInFlight && Date.now() - dealPickInFlight.startedAt > 6000) {
+    pendingDealPick.delete(dealPickInFlight.cardIndex);
+    dealPickInFlight = null;
+    alert('배정 반영이 지연되고 있어요. 다시 시도해 주세요.');
+  }
 
   if (phase === PHASE.DEAL) wireDeal(state);
   else pendingDealPick.clear();

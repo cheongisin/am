@@ -55,6 +55,13 @@ function jsonp(url){
   });
 }
 
+function assertOk(res, op){
+  if(res && typeof res === 'object' && res.ok === false){
+    throw new Error(res.error || (op + ' failed'));
+  }
+  return res;
+}
+
 function urlFor(op, roomCode, payloadObj){
   mustHaveUrl();
   const u = new URL(GAS_URL);
@@ -82,29 +89,29 @@ export async function getState(roomCode){
 }
 
 export async function pullActions(roomCode){
-  return await jsonp(urlFor('actions', roomCode));
+  return assertOk(await jsonp(urlFor('actions', roomCode)), 'actions');
 }
 
 // ---- WRITE (GET/JSONP) ----
 export async function setState(roomCode, state){
-  return await jsonp(urlFor('setState', roomCode, { state }));
+  return assertOk(await jsonp(urlFor('setState', roomCode, { state })), 'setState');
 }
 
 export async function patchState(roomCode, patch){
-  return await jsonp(urlFor('patchState', roomCode, { patch }));
+  return assertOk(await jsonp(urlFor('patchState', roomCode, { patch })), 'patchState');
 }
 
 export async function pushAction(roomCode, action){
-  return await jsonp(urlFor('pushAction', roomCode, { action }));
+  return assertOk(await jsonp(urlFor('pushAction', roomCode, { action })), 'pushAction');
 }
 
 export async function clearActions(roomCode, uptoId=null){
   const payload = (uptoId === null) ? {} : { uptoId };
-  return await jsonp(urlFor('clearActions', roomCode, payload));
+  return assertOk(await jsonp(urlFor('clearActions', roomCode, payload)), 'clearActions');
 }
 
 // ---- Health check ----
 export async function ping(){
   mustHaveUrl();
-  return await jsonp(urlFor('ping'));
+  return assertOk(await jsonp(urlFor('ping')), 'ping');
 }
