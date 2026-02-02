@@ -33,7 +33,7 @@ export const ROLE_LABEL = {
   DETECTIVE:'사립탐정',
   SPY:'스파이',
   TERRORIST:'테러리스트',
-  ARMY:'군인 시민'
+  ARMY:'군인'
 };
 
 export const CARD = {

@@ -22,6 +22,7 @@ let connected = false;
 let roomCode = '';
 let hostBeatTimer = null;
 let actionPollTimer = null;
+let actionPollInFlight = false;
 
 let lastActionId = null;
 let pendingReporterReveal = null;
@@ -255,6 +256,11 @@ async function startRoom(code) {
 async function pollActions() {
   if (!roomCode) return;
 
+  // setInterval로 async 함수가 겹쳐 실행되면 lastActionId/clearActions가 꼬여
+  // 일부 액션이 누락되거나 '첫 배정만 되고 이후 무반응'이 발생할 수 있음
+  if (actionPollInFlight) return;
+  actionPollInFlight = true;
+
   try {
     const res = await pullActions(roomCode);
     actionPollFailures = 0;
@@ -297,6 +303,8 @@ async function pollActions() {
       setConnected(false);
       renderBadgeOnly();
     }
+  } finally {
+    actionPollInFlight = false;
   }
 }
 
