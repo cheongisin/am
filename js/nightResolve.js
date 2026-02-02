@@ -34,7 +34,7 @@ export function resolveNight(state, draft){
     if (doctorTargetId != null && doctorTargetId === victimId) {
       mafiaOutcome = 'DOCTOR_SAVE';
       events.push({ type: 'DOCTOR_SAVE', targetId: victimId });
-    } else if (mafiaVictim.role === ROLE.ARMY && !mafiaVictim.armorUsed) {
+    } else if ((mafiaVictim.role === ROLE.ARMY || mafiaVictim.role === ROLE.SOLDIER) && !mafiaVictim.armorUsed) {
       mafiaVictim.armorUsed = true;
       // 방어 성공은 군인임이 공개되며 이후에도 유지
       mafiaVictim.publicCard = ROLE.ARMY;

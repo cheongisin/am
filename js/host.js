@@ -741,7 +741,7 @@ function buildPhasePanel() {
       <div class="grid cols2">
         <div>
           ${sel('마피아 공격', nightDraft.mafiaId, 'mafiaTarget', false)}
-          ${sel('의사 보호', nightDraft.doctorId, 'doctorTarget', true)}
+          ${sel('의사 보호', nightDraft.doctorId, 'doctorTarget', true, { allowSelf: true })}
           ${sel('경찰 조사', nightDraft.policeId, 'policeTarget', true)}
         </div>
         <div>
@@ -781,9 +781,25 @@ function buildPhasePanel() {
     const name = (t == null) ? '무효(처형 없음)' : (game.players.find(p => p.id == t)?.name ?? '-');
     const target = (t == null) ? null : (game.players.find(p => p.id == t) ?? null);
     const isPolitician = !!target && target.alive && target.role === ROLE.POLITICIAN;
+    const isTerrorist = !!target && target.alive && target.role === ROLE.TERRORIST;
     const primaryLabel = isPolitician ? '로비 발동' : '처형 확정';
+
+    const oxidationSelected = game.executionOxidationTarget ?? '';
+    const oxidationOpts = isTerrorist
+      ? game.players
+          .filter(p => p.alive && p.id !== target.id)
+          .map(p => `<option value="${p.id}" ${String(p.id) === String(oxidationSelected) ? 'selected' : ''}>${p.name}</option>`)
+          .join('')
+      : '';
     return `
       <p class="muted">투표 진행 중: <b>${name}</b></p>
+      ${isTerrorist ? `
+        <label>산화 대상 선택 <span class="muted small">(테러리스트 처형 시 필수)</span></label>
+        <select id="oxidationSel" ${disabled}>
+          <option value="">대상 선택</option>
+          ${oxidationOpts}
+        </select>
+      ` : ''}
       <div class="actions">
         <button class="primary" id="execConfirm" ${disabled}>${primaryLabel}</button>
         <button id="execCancel" ${disabled}>무효 → 밤으로</button>
@@ -1026,12 +1042,15 @@ function wireControlPanel() {
   }
 }
 
-function sel(title, actorId, key, optional) {
+function sel(title, actorId, key, optional, { allowSelf = false } = {}) {
   const actor = actorId != null ? game.players[actorId] : null;
   if (!actor || !actor.alive) return `<p class="muted small">${title}: 사용 불가</p>`;
   const opts = game.players
-    .filter(p => p.alive && p.id !== actorId)
-    .map(p => `<option value="${p.id}" ${nightDraft[key] === p.id ? 'selected' : ''}>${p.name}</option>`)
+    .filter(p => p.alive && (allowSelf ? true : (p.id !== actorId)))
+    .map(p => {
+      const suffix = (p.id === actorId) ? ' (본인)' : '';
+      return `<option value="${p.id}" ${nightDraft[key] === p.id ? 'selected' : ''}>${p.name}${suffix}</option>`;
+    })
     .join('');
   return `
     <label>${title} <span class="muted small">(${actor.name})</span></label>
