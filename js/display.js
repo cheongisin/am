@@ -11,6 +11,7 @@ let roomCode = '';
 let pollTimer = null;
 let beatTimer = null;
 let failures = 0;
+let lastRenderKey = null;
 
 const POLL_MS = 800;
 const BEAT_MS = 2000;
@@ -18,9 +19,6 @@ const FAIL_TO_DISCONNECT = 6;
 
 // DEAL 클릭-폴링 레이스 방지(최소 로컬 상태)
 const pendingDealPick = new Set();
-
-// 렌더 과다 방지 키
-let lastRenderKey = null;
 
 /* =========================
    유틸
@@ -39,19 +37,20 @@ function setConnected(v) {
 }
 
 function getDeckUsed(state) {
+  // 공개 상태 기준: deckInfo.used
   const used = state?.deckInfo?.used;
   return Array.isArray(used) ? used : [];
 }
 
 function computeRenderKey(st) {
+  // eventQueue.token에만 묶지 말고, phase/timer/players/deck을 포함
   const phase = st?.phase ?? '';
   const hb = st?.hostHeartbeat ?? '';
-  const endAt = st?.timer?.endAt ?? '';
   const mode = st?.timer?.mode ?? '';
+  const endAt = st?.timer?.endAt ?? '';
   const alive = (st?.players || []).map(p => (p?.alive === false ? '0' : '1')).join('');
   const pub = (st?.players || []).map(p => (p?.publicCard || '')).join('|');
   const used = getDeckUsed(st).map(v => (v ? '1' : '0')).join('');
-  // eventQueue에만 묶지 않음 (phase/timer/players/deck 사용 포함)
   return `${phase}|${hb}|${mode}|${endAt}|${alive}|${pub}|${used}`;
 }
 
@@ -59,22 +58,18 @@ function computeRenderKey(st) {
    치명 에러 표시
 ========================= */
 function showFatal(err) {
-  try {
-    const msg = err?.stack || err?.message || String(err);
-    if (root) {
-      root.innerHTML = `
-        <div style="padding:16px">
-          <h2>display.js 오류</h2>
-          <pre style="white-space:pre-wrap">${escapeHtml(msg)}</pre>
-          <button onclick="location.reload()">새로고침</button>
-        </div>
-      `;
-    } else {
-      alert(msg);
-    }
-  } catch (e) {
-    alert(String(err));
+  const msg = err?.stack || err?.message || String(err);
+  if (!root) {
+    alert(msg);
+    return;
   }
+  root.innerHTML = `
+    <div style="padding:16px">
+      <h2>display.js 오류</h2>
+      <pre style="white-space:pre-wrap">${escapeHtml(msg)}</pre>
+      <button onclick="location.reload()">새로고침</button>
+    </div>
+  `;
 }
 
 window.addEventListener('error', e => showFatal(e.error || e.message));
@@ -82,10 +77,11 @@ window.addEventListener('unhandledrejection', e => showFatal(e.reason));
 
 /* =========================
    좌석 배치 (사회자 좌측 + 플레이어 위/아래 자동분배)
-   - 사회자: left 10%, top 50%
-   - 플레이어: 오른쪽 영역 x 28~96, 위(y=28)/아래(y=72)
+   - 사회자: 좌측 패널(.hostPanel) 내부에 넣음 (플레이어 아님)
+   - 플레이어: 오른쪽 테이블(.table) 내부 absolute 배치
 ========================= */
 function seatPosRows(n, i) {
+  // 위 = ceil(n/2), 아래 = floor(n/2)
   const topCount = Math.ceil(n / 2);
   const bottomCount = n - topCount;
 
@@ -93,8 +89,10 @@ function seatPosRows(n, i) {
   const idx = isTop ? i : (i - topCount);
   const cnt = isTop ? topCount : bottomCount;
 
-  const xStart = 28;
-  const xEnd = 96;
+  // 오른쪽 테이블 영역에 분포
+  const xStart = 12;
+  const xEnd = 92;
+
   const yTop = 28;
   const yBottom = 72;
 
@@ -130,22 +128,22 @@ function renderDisconnected() {
 }
 
 /* =========================
-   DEAL 패널
+   DEAL UI
 ========================= */
 function renderDealPanel(state) {
   const used = getDeckUsed(state);
   const remain = used.filter(v => !v).length;
 
   return `
-    <div class="deal-panel">
+    <div class="dealwrap">
       <h3>직업 배정 (남은 카드 ${remain})</h3>
-      <div class="deal-grid">
+      <div class="deck">
         ${used.map((u, i) => {
           const pending = pendingDealPick.has(i);
           const disabled = u || pending;
           return `
-            <button class="deal-card" data-idx="${i}" ${disabled ? 'disabled' : ''}>
-              ${u ? '사용됨' : (pending ? '전송중...' : `카드 ${i + 1}`)}
+            <button class="cardbtn ${u ? 'used' : ''}" data-idx="${i}" ${disabled ? 'disabled' : ''}>
+              <img src="assets/cards/back.png" alt="">
             </button>
           `;
         }).join('')}
@@ -162,7 +160,7 @@ function guessNextPlayer(state) {
 function wireDeal(state) {
   const used = getDeckUsed(state);
 
-  document.querySelectorAll('.deal-card').forEach(btn => {
+  document.querySelectorAll('.cardbtn').forEach(btn => {
     btn.onclick = async () => {
       const idx = Number(btn.dataset.idx);
       if (!Number.isFinite(idx)) return;
@@ -188,7 +186,7 @@ function wireDeal(state) {
 }
 
 /* =========================
-   메인 테이블 렌더 (layout.css 기준 구조)
+   메인 렌더 (layout.css 구조에 맞춤)
 ========================= */
 function renderTable(state) {
   const players = Array.isArray(state?.players) ? state.players : [];
@@ -219,12 +217,14 @@ function renderTable(state) {
 
     const { x, y } = seatPosRows(players.length, i);
 
+    // ✅ 핵심: left/top 좌표를 반드시 줘야 함
     return `
       <div class="seat ${dead ? 'dead' : ''}" style="left:${x}%; top:${y}%;">
         <div class="imgwrap">
-          <img src="assets/cards/back.png" alt="">
+          <img src="assets/cards/${dead ? 'dead/' : ''}${(p.publicCard || 'citizen').toLowerCase()}.png" 
+               onerror="this.src='assets/cards/back.png'" alt="">
         </div>
-        <div class="name">${escapeHtml(p?.name || `P${i + 1}`)}</div>
+        <div class="name">${escapeHtml(p?.name || `P${i+1}`)}</div>
       </div>
     `;
   }).join('');
@@ -243,16 +243,21 @@ function renderTable(state) {
         </div>
       </div>
 
-      <div class="table">
-        <!-- 사회자(플레이어 아님) 좌측 고정 -->
-        <div class="seat host" style="left:10%; top:50%;">
-          <div class="imgwrap">
-            <img src="assets/cards/back.png" alt="">
+      <div class="stage">
+        <!-- ✅ 좌측 사회자 패널: 플레이어 아님 -->
+        <div class="hostPanel">
+          <div class="seat host">
+            <div class="imgwrap">
+              <img src="assets/cards/back.png" alt="">
+            </div>
+            <div class="name">HOST</div>
           </div>
-          <div class="name">HOST</div>
         </div>
 
-        ${seatHtml}
+        <!-- ✅ 우측 테이블: 참가자 좌석 absolute 배치 -->
+        <div class="table">
+          ${seatHtml}
+        </div>
       </div>
 
       ${phase === PHASE.DEAL ? renderDealPanel(state) : ''}
