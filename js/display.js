@@ -237,7 +237,11 @@ function closeOverlayById(id) {
 
 function openAssignModal({ state, cardIndex }) {
   const players = Array.isArray(state?.players) ? state.players : [];
-  const unassigned = players.filter(p => p?.assigned === false);
+  // GAS dealPick는 playerId를 players[pid]로 접근(배열 인덱스)하므로,
+  // 화면 표시용 id가 아니라 '배열 인덱스'를 전송해야 할당이 일관되게 동작한다.
+  const unassigned = players
+    .map((p, idx) => ({ p, idx }))
+    .filter(x => x?.p?.assigned === false);
   if (!unassigned.length) return;
 
   if (dealPickInFlight) {
@@ -259,7 +263,7 @@ function openAssignModal({ state, cardIndex }) {
       </div>
       <label class="muted small">플레이어</label>
       <select id="assignSel">
-        ${unassigned.map(p => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join('')}
+        ${unassigned.map(x => `<option value="${x.idx}">${escapeHtml(x.p?.name)}</option>`).join('')}
       </select>
       <div class="actions" style="margin-top:12px; justify-content:flex-end">
         <button id="assignCancel">취소</button>
@@ -276,17 +280,17 @@ function openAssignModal({ state, cardIndex }) {
   modal.querySelector('#assignCancel').onclick = () => modal.remove();
   modal.querySelector('#assignOk').onclick = async () => {
     const sel = modal.querySelector('#assignSel');
-    const playerId = sel ? Number(sel.value) : null;
-    if (!Number.isFinite(playerId)) return;
+    const playerIndex = sel ? Number(sel.value) : null;
+    if (!Number.isFinite(playerIndex)) return;
     modal.querySelector('#assignOk').disabled = true;
 
     pendingDealPick.add(cardIndex);
-    dealPickInFlight = { cardIndex, playerId, startedAt: Date.now() };
+    dealPickInFlight = { cardIndex, playerId: playerIndex, startedAt: Date.now() };
     dealPickStatus = { kind: 'info', message: '배정 요청을 전송했어요. 호스트 처리 대기 중…' };
     refreshDealBoardUi();
     try {
       // 신형 GAS: 배정을 서버에서 원자 처리(가장 빠름)
-      const res = await dealPick(roomCode, { cardIndex, playerId });
+      const res = await dealPick(roomCode, { cardIndex, playerId: playerIndex });
       modal.remove();
 
       // 즉시 UI 반영(폴링 기다리지 않음)
@@ -301,14 +305,14 @@ function openAssignModal({ state, cardIndex }) {
       const reveal = res?.reveal;
       if (reveal && reveal.role != null) {
         const players = Array.isArray(st?.players) ? st.players : [];
-        const p = players.find(x => x?.id === playerId);
-        showDealReveal({ playerName: p?.name || `P${playerId + 1}`, role: reveal.role });
+        const p = players[playerIndex];
+        showDealReveal({ playerName: p?.name || `P${playerIndex + 1}`, role: reveal.role });
       }
     } catch (e) {
       // 구버전 GAS면 기존 방식 폴백
       if (isUnknownOpMessage(e?.message)) {
         try {
-          await pushAction(roomCode, { type: 'DEAL_PICK', cardIndex, playerId });
+          await pushAction(roomCode, { type: 'DEAL_PICK', cardIndex, playerId: playerIndex });
           modal.remove();
           setTimeout(() => { poll().catch(()=>{}); }, 250);
           setTimeout(() => { poll().catch(()=>{}); }, 900);
@@ -393,8 +397,9 @@ function handleEvents(state) {
   const deal = events.find(e => e?.type === 'DEAL_REVEAL');
   if (deal) {
     const players = Array.isArray(state?.players) ? state.players : [];
-    const p = players.find(x => x?.id === deal.playerId);
-    const name = p?.name || `P${Number(deal.playerId) + 1}`;
+    const pid = Number(deal.playerId);
+    const p = Number.isFinite(pid) ? players[pid] : null;
+    const name = p?.name || `P${Number(pid) + 1}`;
     showDealReveal({ playerName: name, role: deal.role });
 
     // ACK: 실제 배정이 반영되었다고 보고 pending 해제
@@ -422,7 +427,8 @@ async function diagnoseDealPickTimeout({ cardIndex, playerId }) {
     const st = await getState(roomCode);
     const used = getDeckUsed(st);
     const players = Array.isArray(st?.players) ? st.players : [];
-    const p = players.find(x => Number(x?.id) === Number(playerId));
+    const pid = Number(playerId);
+    const p = Number.isFinite(pid) ? players[pid] : null;
     if (used[cardIndex] || p?.assigned) {
       // 처리됐는데 UI가 타이밍상 못 본 케이스
       dealPickStatus = null;
