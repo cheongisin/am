@@ -117,11 +117,43 @@
 
 /* Dealing */
 .dealwrap{max-width:1100px;margin:0 auto;padding:14px}
+.dealBackdrop{
+  position:fixed;
+  inset:0;
+  background:rgba(0,0,0,.55);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:14px;
+  z-index:9999;
+}
+.dealModal{
+  width:min(92vw, 720px);
+  border-radius:16px;
+  border:1px solid rgba(255,255,255,.10);
+  background:rgba(2,6,23,.92);
+  box-shadow: var(--shadow);
+  padding:14px;
+}
+.dealHeader{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:10px}
 .deck{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
 @media(min-width:900px){ .deck{grid-template-columns:repeat(4,1fr);} }
 .cardbtn{border-radius:14px;border:1px solid rgba(255,255,255,.08);background:rgba(15,23,42,.55);padding:8px;cursor:pointer}
 .cardbtn img{width:100%;border-radius:12px;border:1px solid var(--border)}
 .cardbtn.used{opacity:.35; cursor:not-allowed}
+
+.revealModal{
+  width:min(92vw, 520px);
+  border-radius:18px;
+  border:1px solid rgba(255,255,255,.12);
+  background:rgba(2,6,23,.92);
+  box-shadow: var(--shadow);
+  padding:18px;
+  text-align:center;
+}
+.revealTitle{font-size:1.1rem;font-weight:800;margin-bottom:10px}
+.revealImg{width:min(60vw, 260px);border-radius:16px;border:1px solid rgba(255,255,255,.12)}
+.revealSub{margin-top:10px;font-size:1.05rem;font-weight:700}
 
 /* Vote panel */
 .voteGrid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
