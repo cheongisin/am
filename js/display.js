@@ -80,6 +80,30 @@ window.addEventListener('unhandledrejection', e => showFatal(e.reason));
    - 사회자: 좌측 패널(.hostPanel) 내부에 넣음 (플레이어 아님)
    - 플레이어: 오른쪽 테이블(.table) 내부 absolute 배치
 ========================= */
+
+function seatPosRows(n, i) {
+  const topCount = Math.ceil(n / 2);
+  const bottomCount = n - topCount;
+
+  const isTop = i < topCount;
+  const idx = isTop ? i : (i - topCount);
+  const cnt = isTop ? topCount : bottomCount;
+
+  // 테이블 내부에서 좌→우 분포
+  const xStart = 12;
+  const xEnd = 92;
+
+  const yTop = 28;
+  const yBottom = 72;
+
+  const x = (cnt <= 1)
+    ? (xStart + xEnd) / 2
+    : (xStart + (xEnd - xStart) * (idx / (cnt - 1)));
+
+  const y = isTop ? yTop : yBottom;
+  return { x, y };
+}
+
 function seatPosRows(n, i) {
   // 위 = ceil(n/2), 아래 = floor(n/2)
   const topCount = Math.ceil(n / 2);
@@ -208,23 +232,16 @@ function renderTable(state) {
   })();
 
   const seatHtml = players.map((p, i) => {
-    const dead = p?.alive === false;
-
-    const label =
-      p?.publicCard && p.publicCard !== 'CITIZEN'
-        ? (ROLE_LABEL[p.publicCard] || p.publicCard)
-        : 'CITIZEN';
+    const dead = p.alive === false;
 
     const { x, y } = seatPosRows(players.length, i);
 
-    // ✅ 핵심: left/top 좌표를 반드시 줘야 함
     return `
       <div class="seat ${dead ? 'dead' : ''}" style="left:${x}%; top:${y}%;">
         <div class="imgwrap">
-          <img src="assets/cards/${dead ? 'dead/' : ''}${(p.publicCard || 'citizen').toLowerCase()}.png" 
-               onerror="this.src='assets/cards/back.png'" alt="">
+          <img src="assets/cards/back.png" alt="">
         </div>
-        <div class="name">${escapeHtml(p?.name || `P${i+1}`)}</div>
+        <div class="name">${escapeHtml(p.name || `P${i+1}`)}</div>
       </div>
     `;
   }).join('');
