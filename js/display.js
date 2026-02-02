@@ -14,6 +14,7 @@ let failures = 0;
 let lastRenderKey = null;
 let lastEventToken = null;
 let revealTimer = null;
+let lastKnownState = null;
 
 const POLL_MS = 1200;
 const PING_MS = 6000;
@@ -201,6 +202,15 @@ function renderDealBoardOverlay(state) {
   `;
 }
 
+function refreshDealBoardUi() {
+  const bd = document.getElementById('dealBoardBackdrop');
+  if (!bd) return;
+  const phase = lastKnownState?.phase || PHASE.SETUP;
+  if (phase !== PHASE.DEAL) return;
+  bd.innerHTML = renderDealPanelInner(lastKnownState);
+  wireDeal(lastKnownState);
+}
+
 function ensureOverlayRoot() {
   let el = document.getElementById('overlayRoot');
   if (el) return el;
@@ -263,6 +273,7 @@ function openAssignModal({ state, cardIndex }) {
     pendingDealPick.add(cardIndex);
     dealPickInFlight = { cardIndex, playerId, startedAt: Date.now() };
     dealPickStatus = { kind: 'info', message: '배정 요청을 전송했어요. 호스트 처리 대기 중…' };
+    refreshDealBoardUi();
     try {
       // 신형 GAS: 배정을 서버에서 원자 처리(가장 빠름)
       const res = await dealPick(roomCode, { cardIndex, playerId });
@@ -299,6 +310,7 @@ function openAssignModal({ state, cardIndex }) {
       pendingDealPick.delete(cardIndex);
       dealPickInFlight = null;
       dealPickStatus = { kind: 'error', message: `전송 실패: ${e?.message || 'unknown'}` };
+      refreshDealBoardUi();
       modal.querySelector('#assignOk').disabled = false;
       alert(e?.message || '전송 실패');
     }
@@ -319,10 +331,7 @@ function wireDeal(state) {
     pendingDealPick.delete(dealPickInFlight.cardIndex);
     dealPickInFlight = null;
     dealPickStatus = { kind: 'warn', message: '대기를 취소했어요. 다른 카드로 다시 시도할 수 있어요.' };
-    // UI 갱신
-    const bd = document.getElementById('dealBoardBackdrop');
-    if (bd) bd.innerHTML = renderDealPanelInner(state);
-    wireDeal(state);
+    refreshDealBoardUi();
   };
 
   document.querySelectorAll('.cardbtn').forEach(btn => {
@@ -396,6 +405,7 @@ async function diagnoseDealPickTimeout({ cardIndex, playerId }) {
 
     if (queued) {
       dealPickStatus = { kind: 'warn', message: '호스트가 아직 액션을 처리하지 못했어요. (호스트 화면이 백그라운드/절전이면 지연될 수 있어요)' };
+      refreshDealBoardUi();
       return;
     }
 
@@ -412,8 +422,10 @@ async function diagnoseDealPickTimeout({ cardIndex, playerId }) {
     }
 
     dealPickStatus = { kind: 'error', message: '호스트가 배정을 반영하지 못했어요. 호스트 탭이 살아있는지 확인해 주세요.' };
+    refreshDealBoardUi();
   } catch {
     dealPickStatus = { kind: 'error', message: '상태 확인 중 오류가 발생했어요. 네트워크/GAS 상태를 확인해 주세요.' };
+    refreshDealBoardUi();
   }
 }
 
@@ -421,6 +433,7 @@ async function diagnoseDealPickTimeout({ cardIndex, playerId }) {
    메인 렌더 (layout.css 구조에 맞춤)
 ========================= */
 function renderTable(state) {
+  lastKnownState = state;
   const players = Array.isArray(state?.players) ? state.players : [];
   const phase = state?.phase || PHASE.SETUP;
   const timer = state?.timer || {};
