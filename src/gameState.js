@@ -5,7 +5,7 @@ export function createGame(players){
     phase: PHASE.SETUP,
     night: 1,
     timer: {mode: 'STOPPED', durationSec: 0, endAt: null, running: false},
-    timerConfig: {daySec: 300},
+    timerConfig: {daySec: 180},
     players: players.map(p=>({
       id:p.id,
       name:p.name,
