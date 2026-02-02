@@ -155,6 +155,68 @@ function clampInt(v, min, max) {
 function defaultDeckConfigFor(n) {
   const cfg = {};
   for (const r of DECK_ROLE_ORDER) cfg[r] = 0;
+
+  // 기본값(사용자 지정): 시민은 자동 계산되므로 여기에 넣지 않는다.
+  // 8인: 마피아2 스파이1 경찰1 의사1 기자1 정치인1 (시민1)
+  // 9인: 마피아2 스파이1 경찰1 의사1 테러1 기자1 사립탐정1 군인1
+  // 10인: 마피아3 경찰1 의사1 정치인1 사립탐정1 (시민3)
+  // 11인: 마피아3 스파이1 경찰1 의사1 정치인1 사립탐정1 군인1 기자1 (시민1)
+  // 12인: 마피아3 스파이1 경찰1 의사1 정치인1 사립탐정1 군인1 기자1 테러1
+  const set = (role, count) => { cfg[role] = Math.max(0, Math.min(3, Number(count) || 0)); };
+
+  if (n === 8) {
+    set(ROLE.MAFIA, 2);
+    set(ROLE.SPY, 1);
+    set(ROLE.POLICE, 1);
+    set(ROLE.DOCTOR, 1);
+    set(ROLE.REPORTER, 1);
+    set(ROLE.POLITICIAN, 1);
+    return cfg;
+  }
+  if (n === 9) {
+    set(ROLE.MAFIA, 2);
+    set(ROLE.SPY, 1);
+    set(ROLE.POLICE, 1);
+    set(ROLE.DOCTOR, 1);
+    set(ROLE.TERRORIST, 1);
+    set(ROLE.REPORTER, 1);
+    set(ROLE.DETECTIVE, 1);
+    set(ROLE.ARMY, 1);
+    return cfg;
+  }
+  if (n === 10) {
+    set(ROLE.MAFIA, 3);
+    set(ROLE.POLICE, 1);
+    set(ROLE.DOCTOR, 1);
+    set(ROLE.POLITICIAN, 1);
+    set(ROLE.DETECTIVE, 1);
+    return cfg;
+  }
+  if (n === 11) {
+    set(ROLE.MAFIA, 3);
+    set(ROLE.SPY, 1);
+    set(ROLE.POLICE, 1);
+    set(ROLE.DOCTOR, 1);
+    set(ROLE.POLITICIAN, 1);
+    set(ROLE.DETECTIVE, 1);
+    set(ROLE.ARMY, 1);
+    set(ROLE.REPORTER, 1);
+    return cfg;
+  }
+  if (n === 12) {
+    set(ROLE.MAFIA, 3);
+    set(ROLE.SPY, 1);
+    set(ROLE.POLICE, 1);
+    set(ROLE.DOCTOR, 1);
+    set(ROLE.POLITICIAN, 1);
+    set(ROLE.DETECTIVE, 1);
+    set(ROLE.ARMY, 1);
+    set(ROLE.REPORTER, 1);
+    set(ROLE.TERRORIST, 1);
+    return cfg;
+  }
+
+  // 범위 밖(안전망): 기존 로직(1장씩) 기반
   for (const r of rolePoolFor(n)) cfg[r] = (cfg[r] || 0) + 1;
   return cfg;
 }
@@ -514,7 +576,7 @@ function render() {
             <span class="badge">총 ${deckSummary.total}/${game.players.length}</span>
             ${deckSummary.valid ? '' : '<span class="badge" style="background:rgba(239,68,68,.18);border-color:rgba(239,68,68,.35)">덱 오류</span>'}
           </div>
-          ${deckSummary.errors.length ? `<p class="muted small" style="color:rgba(239,68,68,.92)">${deckSummary.errors.join(' / ')}</p>` : '<p class="muted small">특수직업 합계가 인원을 넘지 않으면 시민이 자동으로 채워집니다. \n 8인 기준 마피아 2 보조 1 // 경찰 1 의사 1 특수직업 3 \n 12인 기준 마피아 3 보조 1 // 경찰 1 의사 1 특수직업 5</p>'}
+          ${deckSummary.errors.length ? `<p class="muted small" style="color:rgba(239,68,68,.92)">${deckSummary.errors.join(' / ')}</p>` : '<p class="muted small">특수직업 합계가 인원을 넘지 않으면 시민이 자동으로 채워집니다.\n기본값: 8인(마2 스1 경1 의1 기1 정1) / 9인(마2 스1 경1 의1 테1 기1 탐1 군1) / 10인(마3 경1 의1 정1 탐1) / 11인(마3 스1 경1 의1 정1 탐1 군1 기1) / 12인(마3 스1 경1 의1 정1 탐1 군1 기1 테1)</p>'}
         </div>
 
         <div class="actions" style="margin-top:10px">
@@ -582,6 +644,9 @@ function render() {
     const ok = await modalConfirm('세팅 적용', '인원/이름을 적용할까요? (배정은 초기화)');
     if (!ok) return;
 
+    const prevCount = game.players.length;
+    const prevDeckCfg = sanitizeDeckConfig(getDeckConfigForGame());
+
     snapshot(game);
     const newPlayers = Array.from({ length: n }).map((_, i) => {
       const inp = app.querySelector(`input[data-i="${i}"]`);
@@ -590,8 +655,16 @@ function render() {
     });
     game = createGame(newPlayers);
 
-    // 인원 변경 시 덱 구성도 해당 인원 기본값으로 맞춤
-    game.deckConfig = sanitizeDeckConfig(defaultDeckConfigFor(n));
+    // 덱 구성은 기본값으로 강제 리셋하지 않고, 사용자 설정을 유지한다.
+    // - 같은 인원수면: 현재 덱 설정 유지
+    // - 인원 변경이면: 해당 인원수로 저장된 덱 설정을 불러오고, 없으면 기본값
+    if (n === prevCount) {
+      game.deckConfig = prevDeckCfg;
+    } else {
+      const byCount = loadDeckConfigByCount();
+      const fromStorage = byCount[String(n)];
+      game.deckConfig = sanitizeDeckConfig(fromStorage ?? defaultDeckConfigFor(n));
+    }
     saveDeckConfigForCount(n, game.deckConfig);
 
     sync(); render();
