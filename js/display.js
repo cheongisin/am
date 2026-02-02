@@ -563,6 +563,10 @@ async function joinRoom(code) {
     return;
   }
 
+  // Host가 "진행자 접속"을 감지할 수 있도록 join 시 1회만 HELLO를 보낸다.
+  // (주기 PING은 write-lock 경쟁을 키울 수 있어 사용하지 않음)
+  try { await pushAction(roomCode, { type: 'HELLO', at: Date.now() }); } catch {}
+
   // PING(pushAction)은 write-lock 경쟁을 유발해 DEAL(dealPick) 지연/실패를 만들 수 있어 기본 비활성.
   // 연결 상태는 getState 성공 여부로만 판단한다.
   if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }

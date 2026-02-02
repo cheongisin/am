@@ -12,6 +12,14 @@ import { resolveNight } from './nightResolve.js';
 
 const BUILD = '2026-02-02.1';
 
+const TEST_MODE_STORAGE_KEY = 'am.testMode.v1';
+function loadTestMode() {
+  try { return localStorage.getItem(TEST_MODE_STORAGE_KEY) === '1'; } catch { return false; }
+}
+function saveTestMode(v) {
+  try { localStorage.setItem(TEST_MODE_STORAGE_KEY, v ? '1' : '0'); } catch {}
+}
+
 let wakeLock = null;
 async function keepAwake() {
   try { wakeLock = await navigator.wakeLock.request('screen'); } catch {}
@@ -20,7 +28,11 @@ document.addEventListener('click', keepAwake, { once: true });
 
 const app = document.getElementById('app');
 
+// connected: 서버(GAS) 통신 가능 여부
+// clientSeen: 진행자(Display)가 최소 1회 접속 신호(HELLO/PING)를 보냈는지
 let connected = false;
+let clientSeen = false;
+let testMode = loadTestMode();
 let roomCode = '';
 let hostBeatTimer = null;
 let actionPollTimer = null;
@@ -265,6 +277,11 @@ function setConnected(flag) {
   connected = !!flag;
 }
 
+function markClientSeen() {
+  clientSeen = true;
+  lastClientPingAt = Date.now();
+}
+
 async function startRoom(code) {
   roomCode = String(code || '').trim();
   if (!/^\d{4}$/.test(roomCode)) throw new Error('4자리 코드가 필요합니다.');
@@ -274,8 +291,11 @@ async function startRoom(code) {
   pendingReporterReveal = null;
   actionPollFailures = 0;
   lastClientPingAt = 0;
+  clientSeen = false;
 
   await sync();
+  // 방 저장/동기화에 성공했으면 서버 연결은 🟢
+  setConnected(true);
 
   if (hostBeatTimer) clearInterval(hostBeatTimer);
   // setState 주기 호출은 GAS write 락 경쟁을 키워 배정/액션이 밀릴 수 있어 끈다.
@@ -344,13 +364,13 @@ async function pollActions() {
   try {
     const res = await pullActions(roomCode);
     actionPollFailures = 0;
+    // 서버 통신 성공
+    setConnected(true);
 
     const actions = (res && res.actions) ? res.actions : [];
 
-    // 액션이 없으면: 최근 PING 수신 시각으로 연결 판정
+    // 액션이 없어도 서버 연결은 유지. (진행자 접속 감지는 HELLO/PING으로 별도 표시)
     if (!actions.length) {
-      const ok = lastClientPingAt && (Date.now() - lastClientPingAt < CONNECT_TIMEOUT_MS);
-      setConnected(!!ok);
       renderBadgeOnly();
       return;
     }
@@ -381,13 +401,14 @@ async function pollActions() {
 
 function renderBadgeOnly() {
   const b = document.getElementById('connBadge');
-  if (b) b.textContent = `연결 ${connected ? '🟢' : '🔴'}`;
+  if (b) b.textContent = `서버 ${connected ? '🟢' : '🔴'} / 진행자 ${clientSeen ? '🟢' : '🔴'}`;
 }
 
 function render() {
   const deckCfg = getDeckConfigForGame();
   const deckSummary = computeDeckSummary(deckCfg, game.players.length);
-  const canDeal = connected && !game.winner && deckSummary.valid;
+  const allowControls = testMode || connected;
+  const canDeal = allowControls && !game.winner && deckSummary.valid;
 
   const aliveCount = game.players.filter(p => p.alive).length;
   const remaining = getTimerRemaining(game.timer);
@@ -401,9 +422,10 @@ function render() {
       <span class="badge night">${game.phase} ${game.phase === PHASE.NIGHT ? `N${game.night}` : ''}</span>
       <span class="badge">타이머 ${timerText}</span>
       <span class="badge">생존 ${aliveCount}/${game.players.length}</span>
-      <span class="badge" id="connBadge">연결 ${connected ? '🟢' : '🔴'}</span>
+      <span class="badge" id="connBadge">서버 ${connected ? '🟢' : '🔴'} / 진행자 ${clientSeen ? '🟢' : '🔴'}</span>
       <span class="badge">방코드 ${roomCode ? `<b>${roomCode}</b>` : '-'}</span>
       <span class="badge">v${BUILD}</span>
+      ${testMode ? `<span class="badge" style="background:rgba(251,191,36,.14);border-color:rgba(251,191,36,.35)">TEST</span>` : ''}
       ${lastSyncError ? `<span class="badge" style="background:rgba(239,68,68,.18);border-color:rgba(239,68,68,.35)">SYNC ERR ${String(lastSyncError).slice(0,120)}</span>` : ''}
       ${game.winner ? `<span class="badge">승리: ${game.winner}</span>` : ''}
     </div>
@@ -430,7 +452,13 @@ function render() {
             </div>
           </div>
         </div>
-        <p class="muted small">기본 상태는 연결 실패(🔴)이며, 진행자가 접속하면 자동으로 연결 성공(🟢)으로 바뀝니다.</p>
+        <p class="muted small">서버(🔴/🟢)는 GAS 통신 성공 여부입니다. 진행자(🔴/🟢)는 Display가 접속 시 1회 HELLO 신호를 보냈는지 표시합니다.</p>
+        <div class="actions" style="margin-top:8px">
+          <label class="muted small" style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none">
+            <input type="checkbox" id="testModeToggle" ${testMode ? 'checked' : ''}>
+            테스트 모드(연결 무시, 버튼 항상 활성)
+          </label>
+        </div>
       </div>
 
       <div class="card">
@@ -510,6 +538,15 @@ function render() {
     try { await startRoom(code); }
     catch (e) { alert(e.message || String(e)); }
   };
+
+  const tgl = app.querySelector('#testModeToggle');
+  if (tgl) {
+    tgl.onchange = () => {
+      testMode = !!tgl.checked;
+      saveTestMode(testMode);
+      render();
+    };
+  }
 
   // names
   const namesWrap = app.querySelector('#names');
@@ -646,7 +683,7 @@ function buildTimerPanel() {
     game.timer?.mode === 'INFINITE' ? '∞' :
       (game.timer?.mode === 'COUNTDOWN' ? formatTimer(remaining) : '--:--');
 
-  const disabled = connected ? '' : 'disabled';
+  const disabled = (testMode || connected) ? '' : 'disabled';
   const running = game.timer?.mode === 'COUNTDOWN' && game.timer?.running;
   const paused = game.timer?.mode === 'COUNTDOWN' && !game.timer?.running;
 
@@ -676,7 +713,7 @@ function buildPhasePanel() {
   if (game.winner) return `<p class="muted">게임 종료: <b>${game.winner}</b></p>`;
   if (game.phase === PHASE.DEAL) return `<p class="muted">배정 진행: ${game.players.filter(p => p.assigned).length}/${game.players.length}</p>`;
 
-  const disabled = connected ? '' : 'disabled';
+  const disabled = (testMode || connected) ? '' : 'disabled';
 
   if (game.phase === PHASE.NIGHT) {
     if (!nightDraft) initNightDraft();
@@ -968,8 +1005,14 @@ async function onAction(action) {
   const msg = action?.msg || action;
 
   if (msg.type === 'PING') {
-    lastClientPingAt = Date.now();
+    markClientSeen();
     setConnected(true);
+    renderBadgeOnly();
+    return false;
+  }
+
+  if (msg.type === 'HELLO') {
+    markClientSeen();
     renderBadgeOnly();
     return false;
   }
