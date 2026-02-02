@@ -6,8 +6,9 @@
 
 ```javascript
 // Mafia42 State Sync API (GAS)
-// - state_<roomCode>: 방 상태(JSON)
-// - actions_<roomCode>: 진행자 -> 사회자 액션 큐
+// - public_<roomCode>: 진행자(Display)용 공개 상태
+// - private_<roomCode>: 사회자(Host)용 비공개 상태(역할/덱 포함)
+// - actions_<roomCode>: (구버전 호환) 진행자 -> 사회자 액션 큐
 // - JSONP(GET) 전용 (CORS 회피)
 
 function key_(type, room){
@@ -59,9 +60,23 @@ function doGet(e){
 
   var props = PropertiesService.getScriptProperties();
 
+  // 공개 상태
   if(op === 'state'){
-    var rawState = props.getProperty(key_('state', room));
-    return jsonpOut_({ok:true, state: parseJson_(rawState)}, callback);
+    var rawPublic = props.getProperty(key_('public', room));
+    // 구버전 호환(state_<room>)
+    if(!rawPublic) rawPublic = props.getProperty(key_('state', room));
+    return jsonpOut_({ok:true, state: parseJson_(rawPublic)}, callback);
+  }
+
+  // 비공개 상태(토큰 기반. 필요 시 확장)
+  if(op === 'private'){
+    var token = (payload && payload.token) ? String(payload.token) : '';
+    var savedToken = props.getProperty(key_('token', room));
+    if(savedToken && token !== savedToken){
+      return jsonpOut_({ok:false, error:'unauthorized'}, callback);
+    }
+    var rawPrivate = props.getProperty(key_('private', room));
+    return jsonpOut_({ok:true, privateState: parseJson_(rawPrivate)}, callback);
   }
 
   if(op === 'actions'){
@@ -72,6 +87,68 @@ function doGet(e){
   var lock = LockService.getScriptLock();
   try{
     lock.waitLock(10000);
+
+    // 공개+비공개 동시 저장(권장)
+    if(op === 'setboth'){
+      var publicState = payload.publicState || {};
+      var privateState = payload.privateState || {};
+      props.setProperty(key_('public', room), JSON.stringify(publicState));
+      props.setProperty(key_('private', room), JSON.stringify(privateState));
+      return jsonpOut_({ok:true}, callback);
+    }
+
+    // DEAL 배정: 서버에서 원자 처리(배정 1회=요청 1회)
+    if(op === 'dealpick'){
+      var idx = Number(payload.cardIndex);
+      var pid = Number(payload.playerId);
+      if(!(idx >= 0) || !(pid >= 0)) return jsonpOut_({ok:false, error:'bad args'}, callback);
+
+      var priv = parseJson_(props.getProperty(key_('private', room)));
+      if(!priv || !priv.players) return jsonpOut_({ok:false, error:'no private state'}, callback);
+      if(priv.phase !== 'DEAL') return jsonpOut_({ok:false, error:'not in DEAL'}, callback);
+      if(!priv.deck || !priv.deckUsed) return jsonpOut_({ok:false, error:'no deck'}, callback);
+
+      if(priv.deckUsed[idx]) return jsonpOut_({ok:false, error:'card used'}, callback);
+      var p = priv.players[pid];
+      if(!p || p.assigned) return jsonpOut_({ok:false, error:'player assigned'}, callback);
+
+      var role = priv.deck[idx];
+      priv.deckUsed[idx] = true;
+      p.role = role;
+      p.assigned = true;
+      // 공개 카드 기본 유지
+      if(!p.publicCard) p.publicCard = 'CITIZEN';
+      if(typeof p.alive !== 'boolean') p.alive = true;
+
+      priv.eventQueue = { token: Date.now(), events: [{ type:'DEAL_REVEAL', playerId: pid, role: role, cardIndex: idx }] };
+
+      // 공개 상태 갱신(역할은 숨김)
+      var pub = parseJson_(props.getProperty(key_('public', room)));
+      if(!pub || typeof pub !== 'object') pub = {};
+      pub.phase = priv.phase;
+      pub.night = priv.night;
+      pub.timer = priv.timer;
+      pub.timerConfig = priv.timerConfig;
+      pub.winner = priv.winner;
+      pub.eventQueue = priv.eventQueue;
+      pub.deckInfo = { count: (priv.deckUsed || []).length, used: priv.deckUsed };
+      pub.players = (priv.players || []).map(function(pp){
+        return {
+          id: pp.id,
+          name: pp.name,
+          alive: pp.alive,
+          assigned: pp.assigned,
+          publicCard: pp.publicCard,
+          terroristTarget: pp.terroristTarget,
+          role: null
+        };
+      });
+
+      props.setProperty(key_('private', room), JSON.stringify(priv));
+      props.setProperty(key_('public', room), JSON.stringify(pub));
+      return jsonpOut_({ok:true, state: pub, reveal: { playerId: pid, role: role, cardIndex: idx } }, callback);
+    }
+
     if(op === 'setstate'){
       props.setProperty(key_('state', room), JSON.stringify(payload.state || {}));
       return jsonpOut_({ok:true}, callback);

@@ -1,4 +1,4 @@
-import { genRoomCode, getState, pushAction, pullActions } from './gasApi.js';
+import { genRoomCode, getState, pushAction, pullActions, dealPick } from './gasApi.js';
 import { PHASE, CARD, ROLE_LABEL } from '../src/constants.js';
 
 let root = null;
@@ -15,14 +15,18 @@ let lastRenderKey = null;
 let lastEventToken = null;
 let revealTimer = null;
 
-const POLL_MS = 650;
-const PING_MS = 2500;
+const POLL_MS = 1200;
+const PING_MS = 6000;
 const FAIL_TO_DISCONNECT = 6;
 
 // DEAL 클릭-폴링 레이스 방지(최소 로컬 상태)
 const pendingDealPick = new Set();
 let dealPickInFlight = null; // {cardIndex, playerId, startedAt}
 let dealPickStatus = null;   // {message, kind:'info'|'warn'|'error'}
+
+function isUnknownOpMessage(msg){
+  return /unknown\s+op/i.test(String(msg || ''));
+}
 
 /* =========================
    유틸
@@ -260,17 +264,43 @@ function openAssignModal({ state, cardIndex }) {
     dealPickInFlight = { cardIndex, playerId, startedAt: Date.now() };
     dealPickStatus = { kind: 'info', message: '배정 요청을 전송했어요. 호스트 처리 대기 중…' };
     try {
-      await pushAction(roomCode, { type: 'DEAL_PICK', cardIndex, playerId });
+      // 신형 GAS: 배정을 서버에서 원자 처리(가장 빠름)
+      const res = await dealPick(roomCode, { cardIndex, playerId });
       modal.remove();
-      // 체감 속도 개선: 호스트가 곧바로 처리할 수 있으니 짧게 상태를 더 자주 당겨봄
-      setTimeout(() => { poll().catch(()=>{}); }, 250);
-      setTimeout(() => { poll().catch(()=>{}); }, 900);
-    } catch {
+
+      // 즉시 UI 반영(폴링 기다리지 않음)
+      const st = res?.state;
+      if (st && typeof st === 'object') {
+        lastRenderKey = null;
+        renderTable(st);
+      } else {
+        setTimeout(() => { poll().catch(()=>{}); }, 250);
+      }
+
+      const reveal = res?.reveal;
+      if (reveal && reveal.role != null) {
+        const players = Array.isArray(st?.players) ? st.players : [];
+        const p = players.find(x => x?.id === playerId);
+        showDealReveal({ playerName: p?.name || `P${playerId + 1}`, role: reveal.role });
+      }
+    } catch (e) {
+      // 구버전 GAS면 기존 방식 폴백
+      if (isUnknownOpMessage(e?.message)) {
+        try {
+          await pushAction(roomCode, { type: 'DEAL_PICK', cardIndex, playerId });
+          modal.remove();
+          setTimeout(() => { poll().catch(()=>{}); }, 250);
+          setTimeout(() => { poll().catch(()=>{}); }, 900);
+          return;
+        } catch (e2) {
+          e = e2;
+        }
+      }
       pendingDealPick.delete(cardIndex);
       dealPickInFlight = null;
-      dealPickStatus = { kind: 'error', message: '전송 실패(네트워크/GAS). 다시 시도해 주세요.' };
+      dealPickStatus = { kind: 'error', message: `전송 실패: ${e?.message || 'unknown'}` };
       modal.querySelector('#assignOk').disabled = false;
-      alert('전송 실패');
+      alert(e?.message || '전송 실패');
     }
   };
 }
@@ -514,8 +544,8 @@ async function poll() {
 
     failures = 0;
 
-    const hb = Number(st.hostHeartbeat || 0);
-    setConnected(hb && Date.now() - hb < 30000);
+    // getState 성공 자체를 연결로 간주 (hostHeartbeat는 setState 주기가 줄면 stale해질 수 있음)
+    setConnected(true);
 
     const key = computeRenderKey(st);
     if (key !== lastRenderKey) {

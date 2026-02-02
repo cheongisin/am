@@ -3,7 +3,7 @@
 // ✅ GET/JSONP only (CORS/프리플라이트 회피 버전)
 
 // ✅ 너가 배포한 GAS Web App URL (…/exec)
-export const GAS_URL = "https://script.google.com/macros/s/AKfycbx2r-MH_6aMZ3En-HmXLqGLvD7hMykRlqtE4Px338AXTPr1PGnQ3OfMbgVGrATcioHMpg/exec";
+export const GAS_URL = "https://script.google.com/macros/s/AKfycbxk40zdkzJYrIpUwfGYFGaa1DNnkx_HspiWb4rhgm7NyQ6oJY8-uWiSEjwwHclHLN0vxg/exec";
 
 function mustHaveUrl(){
   if(!GAS_URL){
@@ -32,7 +32,7 @@ function jsonp(url){
     const timeout = setTimeout(()=>{
       cleanup();
       reject(new Error('JSONP timeout'));
-    }, 12000);
+    }, 30000);
 
     function cleanup(){
       clearTimeout(timeout);
@@ -62,6 +62,11 @@ function assertOk(res, op){
   return res;
 }
 
+function isUnknownOpError(err){
+  const msg = String(err?.message || err || '');
+  return /unknown\s+op/i.test(msg);
+}
+
 function urlFor(op, roomCode, payloadObj){
   mustHaveUrl();
   const u = new URL(GAS_URL);
@@ -86,6 +91,27 @@ export async function getState(roomCode){
   if(res && res.phase) return res;
   if(res && res.state && res.state.state) return res.state.state;
   return {};
+}
+
+// ---- NEW API (권장) ----
+export async function setBothState(roomCode, { publicState, privateState } = {}){
+  try {
+    return assertOk(await jsonp(urlFor('setBoth', roomCode, { publicState, privateState })), 'setBoth');
+  } catch (e) {
+    // 구버전 GAS 폴백
+    if (isUnknownOpError(e)) {
+      return await setState(roomCode, publicState);
+    }
+    throw e;
+  }
+}
+
+export async function getPrivateState(roomCode, token){
+  return assertOk(await jsonp(urlFor('private', roomCode, { token })), 'private');
+}
+
+export async function dealPick(roomCode, { cardIndex, playerId } = {}){
+  return assertOk(await jsonp(urlFor('dealPick', roomCode, { cardIndex, playerId })), 'dealPick');
 }
 
 export async function pullActions(roomCode){

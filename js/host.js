@@ -1,6 +1,6 @@
 import { modalConfirm } from './util.js';
 import {
-  genRoomCode, getState, setState, patchState,
+  genRoomCode, getState, setState, setBothState,
   pullActions, clearActions
 } from './gasApi.js';
 import { PHASE, ROLE, ROLE_LABEL } from '../src/constants.js';
@@ -219,14 +219,31 @@ async function sync() {
   if (!roomCode) return;
   if (syncInFlight) { syncQueued = true; return; }
   syncInFlight = true;
-  const state = {
+  const pub = {
     roomCode,
     hostHeartbeat: Date.now(),
     ...publicState(game),
   };
 
+  // GAS ScriptProperties는 값 크기 제한이 있어 history는 저장하지 않음
+  const priv = {
+    phase: game.phase,
+    night: game.night,
+    timer: game.timer,
+    timerConfig: game.timerConfig,
+    players: game.players,
+    deck: game.deck,
+    deckUsed: game.deckUsed,
+    votes: game.votes,
+    executionTarget: game.executionTarget,
+    journalistReveals: game.journalistReveals,
+    reporterUsedOnce: game.reporterUsedOnce,
+    eventQueue: game.eventQueue,
+    winner: game.winner,
+  };
+
   try {
-    await setState(roomCode, state);
+    await setBothState(roomCode, { publicState: pub, privateState: priv });
   } finally {
     syncInFlight = false;
     if (syncQueued) {
@@ -253,9 +270,9 @@ async function startRoom(code) {
   await sync();
 
   if (hostBeatTimer) clearInterval(hostBeatTimer);
-  // patchState 기반 heartbeat는 GAS 레이스에서 state를 되돌릴 수 있어 사용하지 않음.
-  // 대신 setState(sync)를 주기적으로 호출해 hostHeartbeat를 갱신한다.
-  hostBeatTimer = setInterval(() => { sync().catch(()=>{}); }, 2000);
+  // setState 주기 호출은 GAS write 락 경쟁을 키워 배정/액션이 밀릴 수 있어 끈다.
+  // (타이머는 endAt 기반이라 주기 sync 없이도 Display가 남은 시간을 계산 가능)
+  hostBeatTimer = null;
 
   if (actionPollTimer) clearInterval(actionPollTimer);
   actionPollTimer = setInterval(pollActions, 600);
@@ -285,16 +302,18 @@ async function pollActions() {
       return;
     }
 
-    // 액션 처리
+    // 액션 처리(여기서는 상태만 변경) → 마지막에 sync 1회
+    let mutated = false;
     for (const a of actions) {
       if (lastActionId != null && a.id <= lastActionId) continue;
       lastActionId = a.id;
-      await onAction(a);
+      const changed = await onAction(a);
+      if (changed) mutated = true;
     }
 
     await clearActions(roomCode, lastActionId);
 
-    await sync();
+    if (mutated) await sync();
     render();
   } catch {
     actionPollFailures += 1;
@@ -897,7 +916,7 @@ async function onAction(action) {
     lastClientPingAt = Date.now();
     setConnected(true);
     renderBadgeOnly();
-    return;
+    return false;
   }
 
   if (msg.type === 'REQ_SYNC') {
@@ -905,10 +924,9 @@ async function onAction(action) {
       snapshot(game);
       journalistReveal(game, pendingReporterReveal);
       pendingReporterReveal = null;
-      await sync();
-      render();
+      return true;
     }
-    return;
+    return false;
   }
 
   if (msg.type === 'DEAL_PICK') {
@@ -929,19 +947,16 @@ async function onAction(action) {
 
     game.eventQueue = { token: Date.now(), events: [{ type: 'DEAL_REVEAL', playerId, role, cardIndex }] };
 
-    await sync();
-    render();
-
     if (game.players.every(x => x.assigned)) {
       snapshot(game);
       game.phase = PHASE.NIGHT;
       setTimerInfinite();
       initNightDraft();
-      await sync();
-      render();
     }
-    return;
+    return true;
   }
+
+  return false;
 }
 
 render();
