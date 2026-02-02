@@ -557,12 +557,9 @@ async function joinRoom(code) {
     return;
   }
 
-  // patchState는 GAS 레이스에서 state를 되돌려버릴 수 있어 사용하지 않음.
-  // 대신 actions 큐에 PING을 넣어 host가 "연결됨"을 판단하게 한다.
-  if (pingTimer) clearInterval(pingTimer);
-  pingTimer = setInterval(() => {
-    pushAction(roomCode, { type: 'PING' }).catch(()=>{});
-  }, PING_MS);
+  // PING(pushAction)은 write-lock 경쟁을 유발해 DEAL(dealPick) 지연/실패를 만들 수 있어 기본 비활성.
+  // 연결 상태는 getState 성공 여부로만 판단한다.
+  if (pingTimer) { clearInterval(pingTimer); pingTimer = null; }
 
   if (pollTimer) clearInterval(pollTimer);
   pollTimer = setInterval(poll, POLL_MS);

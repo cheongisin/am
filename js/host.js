@@ -1,6 +1,6 @@
 import { modalConfirm } from './util.js';
 import {
-  genRoomCode, getState, setState, setBothState,
+  genRoomCode, getState, setState, setBothState, getPrivateState,
   pullActions, clearActions
 } from './gasApi.js';
 import { PHASE, ROLE, ROLE_LABEL } from '../src/constants.js';
@@ -24,6 +24,7 @@ let connected = false;
 let roomCode = '';
 let hostBeatTimer = null;
 let actionPollTimer = null;
+let privatePollTimer = null;
 let actionPollInFlight = false;
 let syncInFlight = false;
 let syncQueued = false;
@@ -284,7 +285,52 @@ async function startRoom(code) {
   if (actionPollTimer) clearInterval(actionPollTimer);
   actionPollTimer = setInterval(pollActions, 600);
 
+  if (privatePollTimer) clearInterval(privatePollTimer);
+  // DEAL 중에는 server-side dealPick이 private/public를 갱신하므로 host도 읽어와서 화면 반영
+  privatePollTimer = setInterval(pollPrivateDuringDeal, 650);
+
   render();
+}
+
+function applyPrivateStateToGame(priv) {
+  if (!priv || typeof priv !== 'object') return;
+  const keepHistory = game.history;
+  const keepDeckConfig = game.deckConfig;
+  const keepRoom = roomCode;
+
+  game.phase = priv.phase ?? game.phase;
+  game.night = priv.night ?? game.night;
+  game.timer = priv.timer ?? game.timer;
+  game.timerConfig = priv.timerConfig ?? game.timerConfig;
+  game.players = Array.isArray(priv.players) ? priv.players : game.players;
+  game.deck = Array.isArray(priv.deck) ? priv.deck : game.deck;
+  game.deckUsed = Array.isArray(priv.deckUsed) ? priv.deckUsed : game.deckUsed;
+  game.votes = priv.votes ?? game.votes;
+  game.executionTarget = priv.executionTarget ?? game.executionTarget;
+  game.journalistReveals = Array.isArray(priv.journalistReveals) ? priv.journalistReveals : game.journalistReveals;
+  game.reporterUsedOnce = !!priv.reporterUsedOnce;
+  game.eventQueue = priv.eventQueue ?? game.eventQueue;
+  game.winner = priv.winner ?? game.winner;
+
+  game.history = keepHistory;
+  game.deckConfig = keepDeckConfig;
+  roomCode = keepRoom;
+}
+
+async function pollPrivateDuringDeal() {
+  if (!roomCode) return;
+  if (game.phase !== PHASE.DEAL) return;
+  try {
+    const res = await getPrivateState(roomCode);
+    const priv = res?.privateState;
+    if (priv) {
+      applyPrivateStateToGame(priv);
+      setConnected(true);
+      render();
+    }
+  } catch {
+    // 무시: 호스트는 UI용 동기화라 실패해도 진행 가능
+  }
 }
 
 async function pollActions() {
