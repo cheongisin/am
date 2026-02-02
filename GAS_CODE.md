@@ -70,8 +70,8 @@ function doGet(e){
   }
 
   var lock = LockService.getScriptLock();
-  lock.tryLock(3000);
   try{
+    lock.waitLock(10000);
     if(op === 'setstate'){
       props.setProperty(key_('state', room), JSON.stringify(payload.state || {}));
       return jsonpOut_({ok:true}, callback);
@@ -112,6 +112,8 @@ function doGet(e){
     }
 
     return jsonpOut_({ok:false, error:'unknown op'}, callback);
+  } catch(err) {
+    return jsonpOut_({ok:false, error: String(err && err.message ? err.message : err)}, callback);
   } finally {
     try{ lock.releaseLock(); }catch(err){}
   }
