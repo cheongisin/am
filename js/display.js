@@ -26,6 +26,10 @@ const POLL_MS = 1200;
 const PING_MS = 6000;
 const FAIL_TO_DISCONNECT = 6;
 
+// 오버레이 표시 시간(연출)
+const EVENT_OVERLAY_MS = 5000;
+const DEAL_REVEAL_MS = 3000;
+
 // DEAL 클릭-폴링 레이스 방지(최소 로컬 상태)
 const pendingDealPick = new Set();
 let dealPickInFlight = null; // {cardIndex, playerId, startedAt}
@@ -309,7 +313,7 @@ function buildEventCaption(e, state) {
   return t;
 }
 
-async function playEventOverlay(e, state, { durationMs = 3000, runId } = {}) {
+async function playEventOverlay(e, state, { durationMs = EVENT_OVERLAY_MS, runId } = {}) {
   if (runId !== eventRunId) return;
 
   const img = EVENT_IMG?.[String(e?.type || '')] || null;
@@ -338,7 +342,7 @@ async function playEventSequence(events, state) {
   closeOverlayById('eventOverlay');
   for (const e of events) {
     if (runId !== eventRunId) return;
-    await playEventOverlay(e, state, { durationMs: 3000, runId });
+    await playEventOverlay(e, state, { durationMs: EVENT_OVERLAY_MS, runId });
   }
 }
 
@@ -497,7 +501,7 @@ function showDealReveal({ playerName, role }) {
   revealTimer = setTimeout(() => {
     closeOverlayById('dealReveal');
     revealTimer = null;
-  }, 3000);
+  }, DEAL_REVEAL_MS);
 }
 
 function handleEvents(state) {
