@@ -638,7 +638,7 @@ async function playEventOverlay(e, state, { durationMs = EVENT_OVERLAY_MS, runId
   if (runId !== eventRunId) return;
 
   // 이벤트 순간 효과음(오버레이 시작 시)
-  playSfxForEvent(e).catch(() => {});
+  try { playSfxForEvent(e); } catch {}
 
   const img = EVENT_IMG?.[String(e?.type || '')] || null;
   if (!img) return;
