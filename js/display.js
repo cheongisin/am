@@ -30,6 +30,315 @@ const FAIL_TO_DISCONNECT = 6;
 const EVENT_OVERLAY_MS = 5000;
 const DEAL_REVEAL_MS = 3000;
 
+/* =========================
+   BGM (페이즈/이벤트 기반)
+========================= */
+
+const BGM = {
+  MAFIA_WIN: 'assets/bgm/mafiawin.mp3',
+  CITIZEN_WIN: 'assets/bgm/citizenwin.mp3',
+  VOTE: 'assets/bgm/votebgm.mp3',
+  DAY_DEFAULT: 'assets/bgm/defultpront.mp3',
+  DAY_DOCTOR: 'assets/bgm/doctorpront.mp3',
+};
+
+// 이벤트 순간 효과음(짧게 1회 재생)
+const SFX = {
+  DOCTOR_SAVE: 'assets/bgm/doctor_save_sfx.mp3',
+  ARMY_SAVE: 'assets/bgm/army_save_sfx.mp3',
+  WEREWOLF_THIRST: 'assets/bgm/werewolf_thirst_sfx.mp3',
+  VIGILANTE_PURGE: 'assets/bgm/mafia_kill_sfx.mp3',
+  // 오타/별칭 허용
+  VIGELANTE_PURGE: 'assets/bgm/mafia_kill_sfx.mp3',
+  TERROR_SELF_DESTRUCT: 'assets/bgm/terror_sfx.mp3',
+  TERROR_OXIDATION: 'assets/bgm/terror_sfx.mp3',
+  REPORTER_NEWS: 'assets/bgm/reporter_news_sfx.mp3',
+  LOBBY: 'assets/bgm/lobby_sfx.mp3',
+};
+
+const BGM_MS = {
+  VOTE: 2 * 60 * 1000,
+  DAY: 3 * 60 * 1000,
+};
+
+let bgmAudio = null;
+let bgmKey = null;
+let bgmStopTimer = null;
+let dayBgmLatched = null; // 'DEFAULT' | 'DOCTOR'
+
+let sfxAudio = null;
+let sfxProcessing = false;
+const sfxQueue = [];
+let sfxLastStartedAt = 0;
+
+let desiredBgm = null; // {key, src, loop, durationMs}
+let bgmPausedForSfx = false;
+let bgmStartedAt = 0;
+let bgmRemainingMs = null;
+
+let lastWinnerBgm = null;
+
+function ensureBgmAudio() {
+  if (bgmAudio) return bgmAudio;
+  const a = new Audio();
+  a.preload = 'auto';
+  a.loop = false;
+  a.volume = 0.65;
+  bgmAudio = a;
+  return a;
+}
+
+function ensureSfxAudio() {
+  if (sfxAudio) return sfxAudio;
+  const a = new Audio();
+  a.preload = 'auto';
+  a.loop = false;
+  a.volume = 0.9;
+  sfxAudio = a;
+  return a;
+}
+
+function clearBgmTimer() {
+  if (bgmStopTimer) {
+    clearTimeout(bgmStopTimer);
+    bgmStopTimer = null;
+  }
+}
+
+function stopBgm() {
+  clearBgmTimer();
+  const a = bgmAudio;
+  if (a) {
+    try { a.pause(); } catch {}
+    try { a.currentTime = 0; } catch {}
+  }
+  bgmKey = null;
+  bgmPausedForSfx = false;
+  bgmStartedAt = 0;
+  bgmRemainingMs = null;
+}
+
+function pauseBgmForSfx() {
+  if (!bgmKey) return;
+  const a = bgmAudio;
+  if (!a) return;
+  if (a.paused) return;
+
+  // duration 제한 BGM은 남은 시간을 보존
+  if (bgmRemainingMs != null && bgmStartedAt) {
+    const elapsed = Date.now() - bgmStartedAt;
+    bgmRemainingMs = Math.max(0, bgmRemainingMs - elapsed);
+  }
+  clearBgmTimer();
+  try { a.pause(); } catch {}
+  bgmPausedForSfx = true;
+}
+
+async function resumeBgmIfPaused() {
+  if (!bgmPausedForSfx) return;
+  if (!bgmKey) return;
+  const a = bgmAudio;
+  if (!a) return;
+  bgmPausedForSfx = false;
+
+  try {
+    await a.play();
+  } catch {
+    return;
+  }
+
+  if (bgmRemainingMs != null) {
+    bgmStartedAt = Date.now();
+    clearBgmTimer();
+    bgmStopTimer = setTimeout(() => {
+      if (bgmKey) stopBgm();
+    }, bgmRemainingMs);
+  }
+}
+
+function enqueueSfx(src) {
+  if (!src) return;
+  sfxQueue.push(src);
+  if (!sfxProcessing) processSfxQueue().catch(() => {});
+}
+
+function playSfxOnce(src) {
+  return new Promise((resolve) => {
+    const a = ensureSfxAudio();
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      a.onended = null;
+      a.onerror = null;
+      resolve();
+    };
+
+    a.onended = finish;
+    a.onerror = finish;
+    try {
+      a.pause();
+      a.currentTime = 0;
+    } catch {}
+    a.src = src;
+
+    // 재생 시작 실패(autoplay 정책 등)도 "끝"으로 취급해 큐가 막히지 않게 한다.
+    a.play().then(() => {
+      sfxLastStartedAt = Date.now();
+    }).catch(() => finish());
+  });
+}
+
+async function processSfxQueue() {
+  sfxProcessing = true;
+  pauseBgmForSfx();
+
+  while (sfxQueue.length) {
+    const src = sfxQueue.shift();
+    await playSfxOnce(src);
+  }
+
+  sfxProcessing = false;
+  // SFX가 끝나면 원하는 BGM을 시작/재개
+  applyDesiredBgm();
+}
+
+function playSfxForEvent(e) {
+  const t = String(e?.type || '');
+  const src = SFX[t] || null;
+  if (!src) return;
+  enqueueSfx(src);
+}
+
+function setDesiredBgm(next) {
+  desiredBgm = next;
+  applyDesiredBgm();
+}
+
+function applyDesiredBgm() {
+  // 효과음이 재생 중이면 BGM은 대기
+  if (sfxProcessing || sfxQueue.length) return;
+
+  if (!desiredBgm) {
+    stopBgm();
+    return;
+  }
+
+  // 같은 키가 이미 재생 중이면 그대로 유지/재개
+  if (bgmKey === desiredBgm.key) {
+    resumeBgmIfPaused();
+    return;
+  }
+
+  // 새 BGM 시작
+  const { key, src, loop, durationMs } = desiredBgm;
+  stopBgm();
+  if (!src) return;
+
+  const a = ensureBgmAudio();
+  a.src = src;
+  a.loop = !!loop;
+  try { a.currentTime = 0; } catch {}
+  bgmKey = key;
+  bgmPausedForSfx = false;
+  bgmRemainingMs = (durationMs != null) ? Number(durationMs) : null;
+  bgmStartedAt = (bgmRemainingMs != null) ? Date.now() : 0;
+
+  if (bgmRemainingMs != null) {
+    clearBgmTimer();
+    bgmStopTimer = setTimeout(() => {
+      if (bgmKey === key) stopBgm();
+    }, bgmRemainingMs);
+  }
+
+  a.play().catch(() => {});
+}
+
+async function playBgm(nextKey, src, { loop = false, durationMs = null } = {}) {
+  if (bgmKey === nextKey) return;
+
+  stopBgm();
+  if (!src) return;
+
+  const a = ensureBgmAudio();
+  a.src = src;
+  a.loop = !!loop;
+  try { a.currentTime = 0; } catch {}
+  bgmKey = nextKey;
+
+  try {
+    await a.play();
+  } catch {
+    // autoplay 정책(사용자 제스처 필요) 등으로 실패할 수 있음
+  }
+
+  if (durationMs != null) {
+    bgmStopTimer = setTimeout(() => {
+      if (bgmKey === nextKey) stopBgm();
+    }, durationMs);
+  }
+}
+
+function shouldUseDoctorDayBgm(state) {
+  const events = Array.isArray(state?.eventQueue?.events) ? state.eventQueue.events : [];
+  return events.some(e => e?.type === 'DOCTOR_SAVE' || (e?.type === 'NOTHING' && e?.reason === 'WEREWOLF_IMMUNE'));
+}
+
+function updateBgmForState(state, prevState) {
+  const phase = state?.phase || PHASE.SETUP;
+  const prevPhase = prevState?.phase || PHASE.SETUP;
+
+  if (phase !== prevPhase) {
+    if (phase !== PHASE.DAY) dayBgmLatched = null;
+  }
+
+  // END가 아니면 승리 BGM 재생 상태를 초기화
+  if (phase !== PHASE.END) lastWinnerBgm = null;
+
+  // 승리 BGM: END 진입 시 1회만 재생
+  if (phase === PHASE.END) {
+    if (state?.winner === 'MAFIA') {
+      if (lastWinnerBgm !== 'MAFIA') {
+        lastWinnerBgm = 'MAFIA';
+        setDesiredBgm({ key: 'WIN:MAFIA', src: BGM.MAFIA_WIN, loop: false, durationMs: null });
+      } else {
+        setDesiredBgm(null);
+      }
+      return;
+    }
+    if (state?.winner === 'CITIZEN') {
+      if (lastWinnerBgm !== 'CITIZEN') {
+        lastWinnerBgm = 'CITIZEN';
+        setDesiredBgm({ key: 'WIN:CITIZEN', src: BGM.CITIZEN_WIN, loop: false, durationMs: null });
+      } else {
+        setDesiredBgm(null);
+      }
+      return;
+    }
+    setDesiredBgm(null);
+    return;
+  }
+
+  // 투표 페이즈: 2분 재생(파일이 더 짧으면 loop)
+  if (phase === PHASE.VOTE) {
+    setDesiredBgm({ key: 'PHASE:VOTE', src: BGM.VOTE, loop: true, durationMs: BGM_MS.VOTE });
+    return;
+  }
+
+  // 낮 페이즈: 3분 재생(파일이 더 짧으면 loop)
+  if (phase === PHASE.DAY) {
+    if (!dayBgmLatched || prevPhase !== PHASE.DAY) {
+      dayBgmLatched = shouldUseDoctorDayBgm(state) ? 'DOCTOR' : 'DEFAULT';
+    }
+    const src = (dayBgmLatched === 'DOCTOR') ? BGM.DAY_DOCTOR : BGM.DAY_DEFAULT;
+    setDesiredBgm({ key: `PHASE:DAY:${dayBgmLatched}`, src, loop: true, durationMs: BGM_MS.DAY });
+    return;
+  }
+
+  // 그 외 페이즈(SETUP/DEAL/NIGHT/EXECUTION 등): 즉시 종료
+  setDesiredBgm(null);
+}
+
 // DEAL 클릭-폴링 레이스 방지(최소 로컬 상태)
 const pendingDealPick = new Set();
 let dealPickInFlight = null; // {cardIndex, playerId, startedAt}
@@ -308,6 +617,14 @@ function buildEventCaption(e, state) {
     const b = playerNameById(state, e?.targetId);
     return `테러리스트 ${a}님이 ${b}님을 산화시켰습니다.`;
   }
+  if (t === 'WEREWOLF_THIRST') {
+    const a = playerNameById(state, e?.targetId);
+    return `${a}님이 짐승에게 습격 당하였습니다.`;
+  }
+  if (t === 'VIGILANTE_PURGE') {
+    const a = playerNameById(state, e?.targetId);
+    return `${a}님이 숙청 당하였습니다.`;
+  }
   if (t === 'REJECTED') return '처형될 사람을 찾지 못하였습니다. 처형이 부결되었습니다.';
   if (t === 'NOTHING') return '조용하게 밤이 넘어갔습니다.';
   if (t === 'LOBBY') {
@@ -319,6 +636,9 @@ function buildEventCaption(e, state) {
 
 async function playEventOverlay(e, state, { durationMs = EVENT_OVERLAY_MS, runId } = {}) {
   if (runId !== eventRunId) return;
+
+  // 이벤트 순간 효과음(오버레이 시작 시)
+  playSfxForEvent(e).catch(() => {});
 
   const img = EVENT_IMG?.[String(e?.type || '')] || null;
   if (!img) return;
@@ -576,6 +896,7 @@ async function diagnoseDealPickTimeout({ cardIndex, playerId }) {
    메인 렌더 (layout.css 구조에 맞춤)
 ========================= */
 function renderTable(state) {
+  const prevState = lastKnownState;
   lastKnownState = state;
   const players = Array.isArray(state?.players) ? state.players : [];
   const phase = state?.phase || PHASE.SETUP;
@@ -603,6 +924,13 @@ function renderTable(state) {
   const dbg = `v${BUILD} · poll ${lastPollMs}ms · ${new Date(lastPollAt || Date.now()).toLocaleTimeString()} · deck ${remainCount}/${usedNow.length}`;
   const errText = lastNetError ? String(lastNetError).slice(0, 140) : '';
 
+  const isGameOver = (state?.phase === PHASE.END);
+  const hostImg = (isGameOver && state?.winner === 'MAFIA')
+    ? 'assets/mafiateam.png'
+    : (isGameOver && state?.winner === 'CITIZEN')
+      ? 'assets/citizenteam.png'
+      : 'assets/pront.png';
+
   root.innerHTML = `
     <div class="board ${phase === PHASE.DEAL ? 'dealActive' : ''}">
       <div class="hud">
@@ -629,7 +957,7 @@ function renderTable(state) {
           </div>
           <div class="seat host">
             <div class="imgwrap">
-              <img src="assets/cards/back.png" alt="">
+              <img src="${hostImg}" alt="">
             </div>
             <div class="name">사회자</div>
           </div>
@@ -645,6 +973,7 @@ function renderTable(state) {
   `;
 
   handleEvents(state);
+  updateBgmForState(state, prevState);
 
   // 상태가 실제로 업데이트되었으면(used=true) pending도 정리
   if (dealPickInFlight && usedNow[dealPickInFlight.cardIndex]) {

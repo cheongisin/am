@@ -17,6 +17,9 @@ export function resolveNight(state, draft){
   const mafiaTargetId = (draft?.mafiaTarget ?? null);
   const doctorTargetId = (draft?.doctorTarget ?? null);
   const terroristTargetId = (draft?.terroristTarget ?? null);
+  const werewolfMarkTargetId = (draft?.werewolfMarkTarget ?? null);
+  const madamMarkTargetId = (draft?.madamMarkTarget ?? null);
+  const vigilantePurgeTargetId = (draft?.vigilantePurgeTarget ?? null);
 
   // 테러리스트 지목값은 상태에 저장(다음에 쓰기 위해)
   if (draft?.terroristId != null) {
@@ -26,24 +29,72 @@ export function resolveNight(state, draft){
 
   // 1) 마피아 공격 처리 (우선순위: 의사 > 군인 > 킬)
   // - 의사 보호와 군인 방어가 겹치면(군인이면서 의사 보호) ARMY_SAVE는 발동하지 않는다.
-  let mafiaOutcome = 'NONE'; // 'NONE' | 'DOCTOR_SAVE' | 'ARMY_SAVE' | 'MAFIA_KILL'
+  let mafiaOutcome = 'NONE'; // 'NONE' | 'DOCTOR_SAVE' | 'ARMY_SAVE' | 'MAFIA_KILL' | 'WEREWOLF_THIRST' | 'NOTHING'
   const mafiaVictim = mafiaTargetId != null ? byId(mafiaTargetId) : null;
+
+  const werewolf = state.players?.find(p => p.role === ROLE.WEREWOLF) ?? null;
+  const werewolfAlive = alive(werewolf);
+
+  // 갈망은 '짐승인간 생존 + 접선 성공'에서만 의미가 있으므로,
+  // 짐승인간이 사망했다면 접선 상태를 해제한다.
+  if (!werewolfAlive) state.werewolfContact = false;
+
+  // 짐승인간 접선 조건: (짐승인간이 표식한 대상) === (마피아 지목 대상)
+  const contactThisNight = werewolfAlive
+    && werewolfMarkTargetId != null
+    && mafiaTargetId != null
+    && Number(werewolfMarkTargetId) === Number(mafiaTargetId);
+  if (contactThisNight) state.werewolfContact = true;
+
+  const thirstActive = !!state.werewolfContact && werewolfAlive;
+
+  // 마담 표식: 표식된 대상의 능력을 '다음 밤 전까지' 봉인
+  const madam = state.players?.find(p => p.role === ROLE.MADAM) ?? null;
+  const madamAlive = alive(madam);
+
+  if (madamAlive && madamMarkTargetId != null) {
+    const sealTarget = byId(Number(madamMarkTargetId));
+    if (alive(sealTarget)) {
+      // 밤 N에 봉인되면, 밤 N의 낮/투표/처형까지 유지되고 밤 N+1 시작 시 자동 만료
+      sealTarget.sealedUntilNight = Math.max(Number(sealTarget.sealedUntilNight || 0), Number(state.night || 0) + 1);
+    }
+  }
 
   if (alive(mafiaVictim)) {
     const victimId = mafiaVictim.id;
-    if (doctorTargetId != null && doctorTargetId === victimId) {
-      mafiaOutcome = 'DOCTOR_SAVE';
-      events.push({ type: 'DOCTOR_SAVE', targetId: victimId });
-    } else if ((mafiaVictim.role === ROLE.ARMY || mafiaVictim.role === ROLE.SOLDIER) && !mafiaVictim.armorUsed) {
-      mafiaVictim.armorUsed = true;
-      // 방어 성공은 군인임이 공개되며 이후에도 유지
-      mafiaVictim.publicCard = ROLE.ARMY;
-      mafiaOutcome = 'ARMY_SAVE';
-      events.push({ type: 'ARMY_SAVE', targetId: victimId });
+
+    // (특수) 짐승인간 갈망: 세이브 무시, 확정 처형
+    // - 접선 이후(thirstActive)부터 마피아 처형은 갈망으로 처리
+    // - 다만, 마피아 처형 대상이 짐승인간이면 죽지 않고 NOTHING 연출
+    if (thirstActive) {
+      if (mafiaVictim.role === ROLE.WEREWOLF) {
+        mafiaOutcome = 'NOTHING';
+        events.push({ type: 'NOTHING', reason: 'WEREWOLF_IMMUNE' });
+      } else {
+        mafiaOutcome = 'WEREWOLF_THIRST';
+        deadSet.add(victimId);
+        events.push({ type: 'WEREWOLF_THIRST', targetId: victimId });
+      }
     } else {
-      mafiaOutcome = 'MAFIA_KILL';
-      deadSet.add(victimId);
-      events.push({ type: 'MAFIA_KILL', targetId: victimId });
+      if (doctorTargetId != null && doctorTargetId === victimId) {
+        mafiaOutcome = 'DOCTOR_SAVE';
+        events.push({ type: 'DOCTOR_SAVE', targetId: victimId });
+      } else if ((mafiaVictim.role === ROLE.ARMY || mafiaVictim.role === ROLE.SOLDIER) && !mafiaVictim.armorUsed) {
+        mafiaVictim.armorUsed = true;
+        // 방어 성공은 군인임이 공개되며 이후에도 유지
+        mafiaVictim.publicCard = ROLE.ARMY;
+        mafiaOutcome = 'ARMY_SAVE';
+        events.push({ type: 'ARMY_SAVE', targetId: victimId });
+      } else {
+        if (mafiaVictim.role === ROLE.WEREWOLF) {
+          mafiaOutcome = 'NOTHING';
+          events.push({ type: 'NOTHING', reason: 'WEREWOLF_IMMUNE' });
+        } else {
+          mafiaOutcome = 'MAFIA_KILL';
+          deadSet.add(victimId);
+          events.push({ type: 'MAFIA_KILL', targetId: victimId });
+        }
+      }
     }
   }
 
@@ -57,7 +108,7 @@ export function resolveNight(state, draft){
   const terroristAlive = alive(terrorist);
   const tTargetId = terroristTargetId != null ? terroristTargetId : (terrorist?.terroristTarget ?? null);
   const tTarget = tTargetId != null ? byId(tTargetId) : null;
-  const isMafiaTeam = (pp) => !!pp && (pp.role === ROLE.MAFIA || pp.role === ROLE.SPY);
+  const isMafiaTeam = (pp) => !!pp && (pp.role === ROLE.MAFIA || pp.role === ROLE.SPY || pp.role === ROLE.WEREWOLF || pp.role === ROLE.MADAM);
 
   const mafiaPickedTerrorist = (mafiaVictim?.id != null && terrorist?.id != null && mafiaVictim.id === terrorist.id);
   const canConsiderSelfDestruct = (mafiaOutcome !== 'DOCTOR_SAVE' && mafiaOutcome !== 'ARMY_SAVE');
@@ -78,6 +129,22 @@ export function resolveNight(state, draft){
     tTarget.publicCard = tTarget.role;
 
     events.push({ type: 'TERROR_SELF_DESTRUCT', terroristId: terrorist.id, targetId: tTarget.id });
+  }
+
+  // 2.5) 자경단원 숙청(1회)
+  // - 조건1: 자경단원이 마피아 처형 대상이 아니어야 발동
+  // - 조건2: 마피아 처형(또는 관련 연출) 이후에 출력
+  const vigilante = state.players?.find(p => p.role === ROLE.VIGILANTE) ?? null;
+  const vigilanteAlive = alive(vigilante);
+  const mafiaPickedVigilante = (vigilante?.id != null && mafiaTargetId != null && Number(vigilante.id) === Number(mafiaTargetId));
+  const purgeRequested = !!draft?.vigilantePurgeUsed && vigilantePurgeTargetId != null;
+  if (purgeRequested && vigilanteAlive && !state.vigilanteUsedOnce && !mafiaPickedVigilante) {
+    state.vigilanteUsedOnce = true;
+    const tgt = byId(vigilantePurgeTargetId);
+    if (alive(tgt) && isMafiaTeam(tgt)) {
+      deadSet.add(tgt.id);
+      events.push({ type: 'VIGILANTE_PURGE', targetId: tgt.id });
+    }
   }
 
   // 3) 기자(특보) 공개 예약값 반환

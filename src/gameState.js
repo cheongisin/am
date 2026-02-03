@@ -6,6 +6,9 @@ export function createGame(players){
     night: 1,
     timer: {mode: 'STOPPED', durationSec: 0, endAt: null, running: false},
     timerConfig: {daySec: 180},
+    // 신규 역할 상태
+    werewolfContact: false, // 짐승인간 접선(이후 마피아 처형=갈망)
+    vigilanteUsedOnce: false, // 자경단원 숙청 1회 사용 여부
     players: players.map(p=>({
       id:p.id,
       name:p.name,
@@ -14,6 +17,7 @@ export function createGame(players){
       alive: true,
       assigned: false,
       armorUsed: false,
+      sealedUntilNight: 0,
       lobbyUsed: false,
       terroristTarget: null
     })),
@@ -37,6 +41,8 @@ export function snapshot(state){
     night: state.night,
     timer: state.timer,
     timerConfig: state.timerConfig,
+    werewolfContact: state.werewolfContact,
+    vigilanteUsedOnce: state.vigilanteUsedOnce,
     players: state.players,
     deck: state.deck,
     deckUsed: state.deckUsed,

@@ -19,7 +19,11 @@ export const ROLE = {
   DETECTIVE:'DETECTIVE',
   SPY:'SPY',
   TERRORIST:'TERRORIST',
-  ARMY:'ARMY'
+  ARMY:'ARMY',
+  MADAM:'MADAM',
+  WEREWOLF:'WEREWOLF',
+  VIGILANTE:'VIGILANTE',
+  AGENT:'AGENT'
 };
 
 export const ROLE_LABEL = {
@@ -33,7 +37,11 @@ export const ROLE_LABEL = {
   DETECTIVE:'사립탐정',
   SPY:'스파이',
   TERRORIST:'테러리스트',
-  ARMY:'군인'
+  ARMY:'군인',
+  MADAM:'마담',
+  WEREWOLF:'짐승인간',
+  VIGILANTE:'자경단원',
+  AGENT:'에이전트'
 };
 
 export const CARD = {
@@ -48,13 +56,19 @@ export const CARD = {
   DETECTIVE:'assets/cards/detective.png',
   SPY:'assets/cards/spy.png',
   TERRORIST:'assets/cards/terrorist.png',
-  ARMY:'assets/cards/army.png'
+  ARMY:'assets/cards/army.png',
+  MADAM:'assets/cards/madam.png',
+  WEREWOLF:'assets/cards/werewolf.png',
+  VIGILANTE:'assets/cards/vigilante.png',
+  AGENT:'assets/cards/agent.png'
 };
 
 export const EVENT_IMG = {
   DOCTOR_SAVE:'assets/events/doctor_save.png',
   ARMY_SAVE:'assets/events/army_save.png',
   MAFIA_KILL:'assets/events/mafia_kill.png',
+  WEREWOLF_THIRST:'assets/events/werewolf_thirst.png',
+  VIGILANTE_PURGE:'assets/events/vigilante_purge.png',
   REPORTER_NEWS:'assets/events/reporter_news.png',
   EXECUTION:'assets/events/execution.png',
   REJECTED:'assets/events/rejected.png',
@@ -75,5 +89,9 @@ export const DEAD_CARD = {
   DETECTIVE:'assets/cards/dead/detective.png',
   SPY:'assets/cards/dead/spy.png',
   TERRORIST:'assets/cards/dead/terrorist.png',
-  ARMY:'assets/cards/dead/army.png'
+  ARMY:'assets/cards/dead/army.png',
+  MADAM:'assets/cards/dead/madam.png',
+  WEREWOLF:'assets/cards/dead/werewolf.png',
+  VIGILANTE:'assets/cards/dead/vigilante.png',
+  AGENT:'assets/cards/dead/agent.png'
 };

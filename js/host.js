@@ -3,7 +3,7 @@ import {
   genRoomCode, getState, setState, setBothState, getPrivateState,
   pullActions, clearActions
 } from './gasApi.js';
-import { PHASE, ROLE, ROLE_LABEL } from '../src/constants.js';
+import { PHASE, ROLE, ROLE_LABEL, CARD } from '../src/constants.js';
 import { createGame, publicState, snapshot, undo } from '../src/gameState.js';
 import { journalistReveal } from '../src/journalist.js';
 import { execute } from '../src/execution.js';
@@ -53,6 +53,40 @@ const FAIL_TO_DISCONNECT = 6;          // 연속 실패 6번 후에만 🔴
 
 let game = createGame(Array.from({ length: 8 }).map((_, i) => ({ id: i, name: `P${i + 1}` })));
 let nightDraft = null;
+
+function isMadamSealed(p) {
+  if (!p) return false;
+  const until = Number(p.sealedUntilNight || 0);
+  const night = Number(game?.night || 0);
+  return until > 0 && night < until;
+}
+
+function showRoleCardModal(playerId) {
+  const p = game.players.find(x => Number(x?.id) === Number(playerId));
+  if (!p || !p.role) return;
+
+  const roleKey = String(p.role || 'CITIZEN');
+  const img = CARD?.[roleKey] || CARD?.CITIZEN || 'assets/cards/citizen.png';
+  const title = `${p.name} - ${ROLE_LABEL?.[roleKey] || roleKey}`;
+
+  const bd = document.createElement('div');
+  bd.className = 'modal-backdrop';
+  bd.innerHTML = `
+    <div class="modal" style="max-width:520px">
+      <h3>${title}</h3>
+      <div style="display:flex;justify-content:center">
+        <img src="${img}" alt="" style="width:min(320px, 100%);height:auto;border-radius:12px;border:1px solid rgba(255,255,255,.10)">
+      </div>
+      <div class="actions" style="justify-content:flex-end">
+        <button class="primary" id="close">닫기</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(bd);
+  const close = () => bd.remove();
+  bd.addEventListener('click', (e) => { if (e.target === bd) close(); });
+  bd.querySelector('#close').onclick = close;
+}
 
 function formatTimer(seconds) {
   const s = Math.max(0, Number(seconds) || 0);
@@ -132,9 +166,14 @@ function winnerText(winner) {
   return null;
 }
 
-const DECK_ROLE_ORDER = [
+const MAFIA_TEAM_ROLES = [
   ROLE.MAFIA,
   ROLE.SPY,
+  ROLE.WEREWOLF,
+  ROLE.MADAM,
+];
+
+const CITIZEN_TEAM_ROLES = [
   ROLE.POLICE,
   ROLE.DOCTOR,
   ROLE.REPORTER,
@@ -142,7 +181,14 @@ const DECK_ROLE_ORDER = [
   ROLE.TERRORIST,
   ROLE.DETECTIVE,
   ROLE.ARMY,
+  ROLE.VIGILANTE,
+  ROLE.AGENT,
   ROLE.CITIZEN,
+];
+
+const DECK_ROLE_ORDER = [
+  ...MAFIA_TEAM_ROLES,
+  ...CITIZEN_TEAM_ROLES,
 ];
 const DECK_CONFIG_STORAGE_KEY = 'am.deckConfigByCount.v1';
 
@@ -306,7 +352,11 @@ function initNightDraft() {
     doctorId: find(ROLE.DOCTOR), doctorTarget: null,
     policeId: find(ROLE.POLICE), policeTarget: null,
     reporterId: find(ROLE.REPORTER), reporterUsed: false, reporterTarget: null,
-    terroristId: find(ROLE.TERRORIST), terroristTarget: null
+    terroristId: find(ROLE.TERRORIST), terroristTarget: null,
+
+    werewolfId: find(ROLE.WEREWOLF), werewolfMarkTarget: null,
+    madamId: find(ROLE.MADAM), madamMarkTarget: null,
+    vigilanteId: find(ROLE.VIGILANTE), vigilantePurgeUsed: false, vigilantePurgeTarget: null,
   };
 }
 
@@ -326,6 +376,8 @@ async function sync() {
     night: game.night,
     timer: game.timer,
     timerConfig: game.timerConfig,
+    werewolfContact: !!game.werewolfContact,
+    vigilanteUsedOnce: !!game.vigilanteUsedOnce,
     players: game.players,
     deck: game.deck,
     deckUsed: game.deckUsed,
@@ -402,6 +454,8 @@ function applyPrivateStateToGame(priv) {
   game.night = priv.night ?? game.night;
   game.timer = priv.timer ?? game.timer;
   game.timerConfig = priv.timerConfig ?? game.timerConfig;
+  game.werewolfContact = !!priv.werewolfContact;
+  game.vigilanteUsedOnce = !!priv.vigilanteUsedOnce;
   game.players = Array.isArray(priv.players) ? priv.players : game.players;
   game.deck = Array.isArray(priv.deck) ? priv.deck : game.deck;
   game.deckUsed = Array.isArray(priv.deckUsed) ? priv.deckUsed : game.deckUsed;
@@ -557,18 +611,36 @@ function render() {
 
         <div style="margin-top:12px">
           <label>덱 구성 (직업별 0~3장, 시민은 자동)</label>
-          <div class="grid cols2" id="deckConfig">
-            ${DECK_ROLE_ORDER.filter(r => r !== ROLE.CITIZEN).map(r => {
-              const label = ROLE_LABEL[r] || r;
-              const v = deckCfg?.[r] ?? 0;
-              return `<div>
-                <label>${label}</label>
-                <input type="number" min="0" max="3" value="${v}" data-deck-role="${r}">
-              </div>`;
-            }).join('')}
-            <div>
-              <label>시민(자동)</label>
-              <input type="text" value="${Math.max(0, deckSummary.citizenCount)}" disabled>
+          
+          <div style="margin-top:8px">
+            <label style="font-weight:600;color:#ef4444">🔴 마피아 팀</label>
+            <div class="grid cols2" style="margin-top:4px">
+              ${MAFIA_TEAM_ROLES.map(r => {
+                const label = ROLE_LABEL[r] || r;
+                const v = deckCfg?.[r] ?? 0;
+                return `<div>
+                  <label>${label}</label>
+                  <input type="number" min="0" max="3" value="${v}" data-deck-role="${r}">
+                </div>`;
+              }).join('')}
+            </div>
+          </div>
+          
+          <div style="margin-top:12px">
+            <label style="font-weight:600;color:#3b82f6">🔵 시민 팀</label>
+            <div class="grid cols2" style="margin-top:4px">
+              ${CITIZEN_TEAM_ROLES.filter(r => r !== ROLE.CITIZEN).map(r => {
+                const label = ROLE_LABEL[r] || r;
+                const v = deckCfg?.[r] ?? 0;
+                return `<div>
+                  <label>${label}</label>
+                  <input type="number" min="0" max="3" value="${v}" data-deck-role="${r}">
+                </div>`;
+              }).join('')}
+              <div>
+                <label>시민(자동)</label>
+                <input type="text" value="${Math.max(0, deckSummary.citizenCount)}" disabled>
+              </div>
             </div>
           </div>
           <div class="actions" style="margin-top:8px">
@@ -752,11 +824,19 @@ function render() {
   app.querySelector('#assignList').innerHTML = game.players.map(p => {
     const r = p.role ? ROLE_LABEL[p.role] : '미배정';
     const pub = p.publicCard && p.publicCard !== 'CITIZEN' ? ` / 공개:${ROLE_LABEL[p.publicCard] || p.publicCard}` : '';
-    return `<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.06)">
-      <div>${p.name}${p.alive ? '' : ' <span class="muted">(사망)</span>'}</div>
-      <div class="muted small">${r}${pub}</div>
+    const btn = p.role
+      ? `<button data-rolecard-player="${p.id}" style="padding:3px 8px;font-size:12px">[직업사진]</button>`
+      : '';
+    return `<div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.06)">
+      <div style="flex:1">${p.name}${p.alive ? '' : ' <span class="muted">(사망)</span>'}</div>
+      <div>${btn}</div>
+      <div class="muted small" style="text-align:right">${r}${pub}</div>
     </div>`;
   }).join('');
+
+  app.querySelectorAll('button[data-rolecard-player]').forEach(btn => {
+    btn.onclick = () => showRoleCardModal(btn.getAttribute('data-rolecard-player'));
+  });
 
   app.querySelector('#controlPanel').innerHTML = buildControlPanel();
   wireControlPanel();
@@ -814,11 +894,13 @@ function buildPhasePanel() {
         <div>
           ${sel('마피아 공격', nightDraft.mafiaId, 'mafiaTarget', false)}
           ${sel('의사 보호', nightDraft.doctorId, 'doctorTarget', true, { allowSelf: true })}
-          ${sel('경찰 조사', nightDraft.policeId, 'policeTarget', true)}
+          ${sel('짐승인간 표식', nightDraft.werewolfId, 'werewolfMarkTarget', true)}
+          ${sel('마담 표식', nightDraft.madamId, 'madamMarkTarget', true)}
         </div>
         <div>
           ${reporterBlock()}
           ${sel('테러리스트 지목', nightDraft.terroristId, 'terroristTarget', true)}
+          ${vigilanteBlock()}
         </div>
       </div>
       <div class="actions" style="margin-top:10px"><button class="primary" id="nightResolve" ${disabled}>밤 확정 → DAY</button></div>`;
@@ -852,12 +934,13 @@ function buildPhasePanel() {
     const t = game.executionTarget;
     const name = (t == null) ? '무효(처형 없음)' : (game.players.find(p => p.id == t)?.name ?? '-');
     const target = (t == null) ? null : (game.players.find(p => p.id == t) ?? null);
-    const isPolitician = !!target && target.alive && target.role === ROLE.POLITICIAN;
-    const isTerrorist = !!target && target.alive && target.role === ROLE.TERRORIST;
-    const primaryLabel = isPolitician ? '로비 발동' : '처형 확정';
+    const sealed = !!target && isMadamSealed(target);
+    const politicianLobbyActive = !!target && target.alive && target.role === ROLE.POLITICIAN && !sealed;
+    const terroristOxidationActive = !!target && target.alive && target.role === ROLE.TERRORIST && !sealed;
+    const primaryLabel = politicianLobbyActive ? '로비 발동' : '처형 확정';
 
     const oxidationSelected = game.executionOxidationTarget ?? '';
-    const oxidationOpts = isTerrorist
+    const oxidationOpts = terroristOxidationActive
       ? game.players
           .filter(p => p.alive && p.id !== target.id)
           .map(p => `<option value="${p.id}" ${String(p.id) === String(oxidationSelected) ? 'selected' : ''}>${p.name}</option>`)
@@ -865,7 +948,7 @@ function buildPhasePanel() {
       : '';
     return `
       <p class="muted">투표 진행 중: <b>${name}</b></p>
-      ${isTerrorist ? `
+      ${terroristOxidationActive ? `
         <label>산화 대상 선택 <span class="muted small">(테러리스트 처형 시 필수)</span></label>
         <select id="oxidationSel" ${disabled}>
           <option value="">대상 선택</option>
@@ -937,6 +1020,14 @@ function wireControlPanel() {
       snapshot(game);
       nightDraft.reporterUsed = rep.checked;
       if (!nightDraft.reporterUsed) nightDraft.reporterTarget = null;
+      render();
+    };
+
+    const vig = app.querySelector('#vigUsed');
+    if (vig) vig.onchange = () => {
+      snapshot(game);
+      nightDraft.vigilantePurgeUsed = vig.checked;
+      if (!nightDraft.vigilantePurgeUsed) nightDraft.vigilantePurgeTarget = null;
       render();
     };
 
@@ -1039,22 +1130,24 @@ function wireControlPanel() {
     app.querySelector('#execConfirm').onclick = async () => {
       const t = game.executionTarget;
       const target = (t == null) ? null : (game.players.find(p => p.id == t) ?? null);
-      const isPolitician = !!target && target.alive && target.role === ROLE.POLITICIAN;
+      const sealed = !!target && isMadamSealed(target);
+      const politicianLobbyActive = !!target && target.alive && target.role === ROLE.POLITICIAN && !sealed;
+      const terroristOxidationActive = !!target && target.alive && target.role === ROLE.TERRORIST && !sealed;
 
       const ok = await modalConfirm(
-        isPolitician ? '정치인 로비' : '처형 확정',
-        isPolitician ? '정치인 로비가 발동됩니다. (처형 무효)' : '처형을 확정할까요? (되돌리기 가능)'
+        politicianLobbyActive ? '정치인 로비' : '처형 확정',
+        politicianLobbyActive ? '정치인 로비가 발동됩니다. (처형 무효)' : (sealed ? '마담의 봉인으로 능력이 발동하지 않습니다. 처형을 확정할까요? (되돌리기 가능)' : '처형을 확정할까요? (되돌리기 가능)')
       );
       if (!ok) return;
 
       snapshot(game);
-      // 정치인: 투표 처형 무시 능력은 제한 없이 항상 발동
-      if (isPolitician) {
+      // 정치인: 봉인되지 않은 경우에만 로비 발동
+      if (politicianLobbyActive) {
         target.publicCard = ROLE.POLITICIAN;
         game.eventQueue = { token: Date.now(), events: [{ type: 'LOBBY', politicianId: target.id }] };
       } else {
         // 테러리스트 산화는 '대상 선택'이 선행되어야 상태가 꼬이지 않는다.
-        if (target && target.alive && target.role === ROLE.TERRORIST) {
+        if (terroristOxidationActive) {
           const oxTargetId = game.executionOxidationTarget;
           const oxTarget = (oxTargetId != null) ? game.players.find(p => p.id === oxTargetId) : null;
           if (!oxTarget || !oxTarget.alive || oxTarget.id === target.id) {
@@ -1069,7 +1162,7 @@ function wireControlPanel() {
         const executedPlayer = executedId != null ? game.players[executedId] : null;
 
         // 처형으로 직업이 공개되는 케이스
-        if (executedPlayer?.role === ROLE.TERRORIST) {
+        if (executedPlayer?.role === ROLE.TERRORIST && terroristOxidationActive) {
           executedPlayer.publicCard = ROLE.TERRORIST;
           const oxTargetId = game.executionOxidationTarget;
           const oxTarget = (oxTargetId != null) ? game.players.find(p => p.id === oxTargetId) : null;
@@ -1085,6 +1178,7 @@ function wireControlPanel() {
         } else {
           const evs = [{ type: 'EXECUTION', executedId }];
           game.eventQueue = { token: Date.now(), events: evs };
+          game.executionOxidationTarget = null;
         }
       }
 
@@ -1177,6 +1271,37 @@ function reporterBlock() {
       <span class="muted small">${game.reporterUsedOnce ? '이미 사용함' : (disabled ? '첫밤 불가' : '사용')}</span>
     </div>
     <select data-key="reporterTarget" ${checked ? '' : 'disabled'}>
+      <option value="">대상 선택</option>
+      ${opts}
+    </select>`;
+}
+
+function vigilanteBlock() {
+  const vid = nightDraft.vigilanteId;
+  const actor = vid != null ? game.players[vid] : null;
+  if (!actor || !actor.alive) return `<p class="muted small">자경단원: 사용 불가</p>`;
+
+  const actorRoleLabel = ROLE_LABEL[actor.role] ?? actor.role ?? '-';
+  const sameRoleAliveNames = game.players
+    .filter(p => p.alive && p.role === actor.role)
+    .map(p => p.name)
+    .filter(Boolean);
+  const actorGroupLabel = `${actorRoleLabel} (${sameRoleAliveNames.join(', ')})`;
+
+  const disabled = !!game.vigilanteUsedOnce;
+  const checked = nightDraft.vigilantePurgeUsed && !disabled;
+  const opts = game.players
+    .filter(p => p.alive && p.id !== vid)
+    .map(p => `<option value="${p.id}" ${nightDraft.vigilantePurgeTarget === p.id ? 'selected' : ''}>${p.name}</option>`)
+    .join('');
+
+  return `
+    <label>자경단원 숙청(1회) <span class="muted small">(${actorGroupLabel})</span></label>
+    <div class="actions" style="margin:6px 0">
+      <input id="vigUsed" type="checkbox" style="width:auto" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
+      <span class="muted small">${game.vigilanteUsedOnce ? '이미 사용함' : '사용'}</span>
+    </div>
+    <select data-key="vigilantePurgeTarget" ${checked ? '' : 'disabled'}>
       <option value="">대상 선택</option>
       ${opts}
     </select>`;
