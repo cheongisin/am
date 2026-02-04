@@ -40,12 +40,14 @@ const BGM = {
   VOTE: 'assets/bgm/votebgm.mp3',
   DAY_DEFAULT: 'assets/bgm/defultpront.mp3',
   DAY_DOCTOR: 'assets/bgm/doctorpront.mp3',
+  NIGHT: 'assets/bgm/night_sfx.mp3',
 };
 
 // 이벤트 순간 효과음(짧게 1회 재생)
 const SFX = {
   DOCTOR_SAVE: 'assets/bgm/doctor_save_sfx.mp3',
   ARMY_SAVE: 'assets/bgm/army_save_sfx.mp3',
+  MAFIA_KILL: 'assets/bgm/mafia_kill_sfx.mp3',
   WEREWOLF_THIRST: 'assets/bgm/werewolf_thirst_sfx.mp3',
   VIGILANTE_PURGE: 'assets/bgm/mafia_kill_sfx.mp3',
   // 오타/별칭 허용
@@ -54,6 +56,8 @@ const SFX = {
   TERROR_OXIDATION: 'assets/bgm/terror_sfx.mp3',
   REPORTER_NEWS: 'assets/bgm/reporter_news_sfx.mp3',
   LOBBY: 'assets/bgm/lobby_sfx.mp3',
+  EXECUTION: 'assets/bgm/execution_sfx.mp3',
+  NOTHING: 'assets/bgm/nothing_sfx.mp3',
 };
 
 const BGM_MS = {
@@ -325,6 +329,12 @@ function updateBgmForState(state, prevState) {
     return;
   }
 
+  // 최후변론 페이즈: 투표 BGM을 제한 없이 반복(밤 전환까지 유지)
+  if (phase === PHASE.EXECUTION) {
+    setDesiredBgm({ key: 'PHASE:VOTE:EXECUTION', src: BGM.VOTE, loop: true, durationMs: null });
+    return;
+  }
+
   // 낮 페이즈: 3분 재생(파일이 더 짧으면 loop)
   if (phase === PHASE.DAY) {
     if (!dayBgmLatched || prevPhase !== PHASE.DAY) {
@@ -335,7 +345,13 @@ function updateBgmForState(state, prevState) {
     return;
   }
 
-  // 그 외 페이즈(SETUP/DEAL/NIGHT/EXECUTION 등): 즉시 종료
+  // 밤 페이즈: night_sfx를 계속 반복
+  if (phase === PHASE.NIGHT) {
+    setDesiredBgm({ key: 'PHASE:NIGHT', src: BGM.NIGHT, loop: true, durationMs: null });
+    return;
+  }
+
+  // 그 외 페이즈(SETUP/DEAL/NIGHT 등): 즉시 종료
   setDesiredBgm(null);
 }
 

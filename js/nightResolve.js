@@ -37,16 +37,11 @@ export function resolveNight(state, draft){
 
   // 갈망은 '짐승인간 생존 + 접선 성공'에서만 의미가 있으므로,
   // 짐승인간이 사망했다면 접선 상태를 해제한다.
+  const prevContact = !!state.werewolfContact;
   if (!werewolfAlive) state.werewolfContact = false;
 
-  // 짐승인간 접선 조건: (짐승인간이 표식한 대상) === (마피아 지목 대상)
-  const contactThisNight = werewolfAlive
-    && werewolfMarkTargetId != null
-    && mafiaTargetId != null
-    && Number(werewolfMarkTargetId) === Number(mafiaTargetId);
-  if (contactThisNight) state.werewolfContact = true;
-
-  const thirstActive = !!state.werewolfContact && werewolfAlive;
+  // 갈망은 이전 접선 성공 상태에서만 발동 (이번 밤 접선은 다음 밤부터 적용)
+  const thirstActive = prevContact && werewolfAlive;
 
   // 마담 표식: 표식된 대상의 능력을 '다음 밤 전까지' 봉인
   const madam = state.players?.find(p => p.role === ROLE.MADAM) ?? null;
@@ -60,6 +55,7 @@ export function resolveNight(state, draft){
     }
   }
 
+  let mafiaKillApplied = false;
   if (alive(mafiaVictim)) {
     const victimId = mafiaVictim.id;
 
@@ -93,6 +89,7 @@ export function resolveNight(state, draft){
           mafiaOutcome = 'MAFIA_KILL';
           deadSet.add(victimId);
           events.push({ type: 'MAFIA_KILL', targetId: victimId });
+          mafiaKillApplied = true;
         }
       }
     }
@@ -120,6 +117,7 @@ export function resolveNight(state, draft){
         break;
       }
     }
+    mafiaKillApplied = false;
     deadSet.add(terrorist.id);
     deadSet.add(tTarget.id);
 
@@ -130,6 +128,16 @@ export function resolveNight(state, draft){
 
     events.push({ type: 'TERROR_SELF_DESTRUCT', terroristId: terrorist.id, targetId: tTarget.id });
   }
+
+  // 짐승인간 접선 조건(강화):
+  // - (짐승인간이 표식한 대상) === (마피아 지목 대상)
+  // - 그 대상이 실제로 마피아 처형으로 사망해야 접선 성공
+  const contactThisNight = werewolfAlive
+    && mafiaKillApplied
+    && werewolfMarkTargetId != null
+    && mafiaTargetId != null
+    && Number(werewolfMarkTargetId) === Number(mafiaTargetId);
+  if (werewolfAlive) state.werewolfContact = prevContact || contactThisNight;
 
   // 2.5) 자경단원 숙청(1회)
   // - 조건1: 자경단원이 마피아 처형 대상이 아니어야 발동
